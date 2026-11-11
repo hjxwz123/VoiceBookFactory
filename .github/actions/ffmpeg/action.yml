@@ -1,0 +1,22 @@
+name: Install ffmpeg
+description: >-
+  ffmpeg from apt with time limits; when the Ubuntu mirror is slow or down (it sometimes hangs for many
+  minutes on hosted runners), a static build from GitHub instead.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        if command -v ffmpeg >/dev/null 2>&1; then ffmpeg -version | head -1; exit 0; fi
+        apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+        if timeout 180 sudo apt-get $apt_opts update -qq && timeout 300 sudo apt-get $apt_opts install -y -qq --no-install-recommends ffmpeg; then
+          ffmpeg -version | head -1
+          exit 0
+        fi
+        echo "::warning::apt was too slow; using a static ffmpeg build"
+        curl -fsSL --retry 3 --max-time 300 -o /tmp/ffmpeg.tar.xz \
+          https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+        sudo tar -xJf /tmp/ffmpeg.tar.xz -C /opt
+        sudo ln -sf /opt/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ffmpeg
+        sudo ln -sf /opt/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/ffprobe
+        ffmpeg -version | head -1
