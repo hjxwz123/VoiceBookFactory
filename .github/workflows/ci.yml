@@ -20,7 +20,6 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/hjxwz123/voicebookfactory
-  PG_DSN: host=localhost port=5432 user=voicebook password=voicebook dbname=voicebook sslmode=disable TimeZone=UTC
 
 jobs:
   version:
@@ -77,7 +76,7 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
-      VB_TEST_PG_DSN: ${{ env.PG_DSN }}
+      VB_TEST_PG_DSN: host=localhost port=5432 user=voicebook password=voicebook dbname=voicebook sslmode=disable TimeZone=UTC
       VB_TEST_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +116,7 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       VB_DB_DRIVER: postgres
-      VB_DB_DSN: ${{ env.PG_DSN }}
+      VB_DB_DSN: host=localhost port=5432 user=voicebook password=voicebook dbname=voicebook sslmode=disable TimeZone=UTC
       VB_REDIS_URL: redis://localhost:6379/0
       VB_DATA_DIR: /tmp/vb/data
       VB_DEV: "true" # the scripts read verification codes from dev-mode responses
