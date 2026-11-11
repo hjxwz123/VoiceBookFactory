@@ -1,5 +1,6 @@
 # Build the app image from this checkout instead of pulling a released one:
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# The BUILD_* settings in .env (all optional) point the build at domestic mirrors in mainland China.
 services:
   app:
     image: voicebook:local
@@ -7,3 +8,9 @@ services:
       context: .
       args:
         VERSION: ${VB_VERSION:-dev}
+        NODE_IMAGE: ${BUILD_NODE_IMAGE:-node:24-slim}
+        GO_IMAGE: ${BUILD_GO_IMAGE:-golang:1.27}
+        RUNTIME_IMAGE: ${BUILD_RUNTIME_IMAGE:-debian:trixie-slim}
+        NPM_REGISTRY: ${BUILD_NPM_REGISTRY:-}
+        GOPROXY: ${BUILD_GOPROXY:-}
+        APT_MIRROR: ${BUILD_APT_MIRROR:-}

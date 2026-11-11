@@ -2,6 +2,16 @@
 
 版本号遵循语义化版本：`主版本.次版本.修订号`。
 
+## [Unreleased]
+
+### 部署
+- 国内服务器部署：
+  - `.env` 里可以用 `VB_IMAGE`、`POSTGRES_IMAGE`、`REDIS_IMAGE` 指定国内镜像地址；
+  - CI 可以把应用、PostgreSQL、Redis 镜像同步到自己的阿里云容器镜像服务（配置 `ALIYUN_NAMESPACE` 等变量和密钥后启用）；
+  - 从源码构建镜像时，可以使用 npmmirror、goproxy.cn、阿里云 Debian 镜像（`.env` 里的 `BUILD_*`）；
+  - README 新增「国内服务器部署」一节。
+- 镜像不再附带 provenance 证明清单，只包含 amd64 和 arm64 两个架构，兼容更多镜像仓库和镜像站。
+
 ## [0.1.0] - 2026-11-11
 
 第一个公开版本。

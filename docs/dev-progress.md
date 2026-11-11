@@ -632,6 +632,28 @@ python3 scripts/ai_smoke.py scripts/sample.txt
 - 两个实例共用 SQLite 文件和内存版 Redis 时，`cluster_check.py` 11 项全部通过。
 - PostgreSQL 与 Redis 的真实验证在 GitHub Actions 上进行。
 
+## 国内服务器部署（2026-11-11）
+
+- GitHub 上唯一失败的一次构建是首个提交的工作流文件写法错误：job 级 env 里不能引用 `env` 上下文。下一个提交已经修复，之后 main 和 v0.1.0 的构建全部通过。
+- `docker-compose.yml` 的三个镜像都可以在 `.env` 里换成国内地址：`VB_IMAGE`（应用，不带版本号）、`POSTGRES_IMAGE`、`REDIS_IMAGE`。
+- `Dockerfile` 新增可选构建参数：基础镜像 `NODE_IMAGE` / `GO_IMAGE` / `RUNTIME_IMAGE`，以及 `NPM_REGISTRY`、`GOPROXY`、`APT_MIRROR`。`docker-compose.build.yml` 从 `.env` 的 `BUILD_*` 读取这些参数。已实测 `APT_MIRROR=mirrors.aliyun.com` 在 trixie 上能正常更新源。
+- CI：仓库变量 `ALIYUN_NAMESPACE`（可选再加 `ALIYUN_REGISTRY`）和密钥 `ALIYUN_USERNAME` / `ALIYUN_PASSWORD` 配置好之后，会用 `docker buildx imagetools create` 把应用镜像（同样的标签）和 postgres:17-alpine、redis:7-alpine（amd64 + arm64）复制到阿里云 ACR。未配置时跳过。镜像构建关闭了 provenance，索引里只有 amd64 和 arm64。
+- README「国内服务器部署」：
+  - 两种用国内源安装 Docker 的方法：get.docker.com 加 `--mirror Aliyun`，或阿里云 Docker CE apt 源；
+  - 部署文件改为从 main 下载（各版本通用），也可以用 scp 上传；
+  - 三种镜像来源：
+    - 阿里云 ACR（自动或手动同步）；
+    - 公共镜像站：南京大学 `ghcr.nju.edu.cn` 已验证能拉取 0.1.0 的 amd64 和 arm64，Docker Hub 镜像通过加速器拉取；
+    - 离线导入；
+  - 用国内源从源码构建。
+- 验证：
+  - 阿里云 Docker CE 源的 Ubuntu noble、Debian trixie 都可访问；
+  - npmmirror、goproxy.cn、阿里云 Debian 镜像都可访问；
+  - `imagetools create --dry-run` 能生成多架构清单；
+  - compose 配置在加了镜像变量和构建参数后解析正确；
+  - actionlint 通过。
+- 从本机访问时，DaoCloud 的公共镜像握手超时或返回 500，所以 README 没有推荐它。
+
 ## 音乐生成：Suno（2026-11-10）
 
 **接入方式**：

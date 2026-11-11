@@ -198,6 +198,30 @@ jobs:
             BUILD_TIME=${{ steps.time.outputs.now }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false # a plain amd64 + arm64 index, which every registry (and mirror) understands
+      # Optional copy for servers in mainland China: set the repository variable ALIYUN_NAMESPACE (and
+      # ALIYUN_REGISTRY if not registry.cn-hangzhou.aliyuncs.com) plus the secrets ALIYUN_USERNAME and
+      # ALIYUN_PASSWORD (Container Registry fixed password). Skipped while ALIYUN_NAMESPACE is empty.
+      - name: Log in to Alibaba Cloud Container Registry
+        if: vars.ALIYUN_NAMESPACE != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.ALIYUN_REGISTRY || 'registry.cn-hangzhou.aliyuncs.com' }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+      - name: Copy the app, PostgreSQL and Redis images to Alibaba Cloud
+        if: vars.ALIYUN_NAMESPACE != ''
+        env:
+          ACR: ${{ vars.ALIYUN_REGISTRY || 'registry.cn-hangzhou.aliyuncs.com' }}/${{ vars.ALIYUN_NAMESPACE }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for t in $TAGS; do
+            echo "copy $t -> $ACR/voicebookfactory:${t##*:}"
+            docker buildx imagetools create -t "$ACR/voicebookfactory:${t##*:}" "$t"
+          done
+          for src in postgres:17-alpine redis:7-alpine; do
+            docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t "$ACR/$src" "docker.io/library/$src"
+          done
       - name: Deploy the pushed image with docker compose (PostgreSQL + Redis) and check it
         run: |
           tag=sha-${GITHUB_SHA::7}

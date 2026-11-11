@@ -5,11 +5,12 @@
 #
 # Upgrade or roll back by changing VB_VERSION (e.g. 0.1.0) and running `docker compose up -d` again.
 # Images: ghcr.io/hjxwz123/voicebookfactory:<version> (also :<major>.<minor> and :latest).
+# In mainland China set VB_IMAGE / POSTGRES_IMAGE / REDIS_IMAGE in .env to domestic copies (see README).
 name: voicebook
 
 services:
   app:
-    image: ghcr.io/hjxwz123/voicebookfactory:${VB_VERSION:?请在 .env 里设置 VB_VERSION，例如 0.1.0}
+    image: ${VB_IMAGE:-ghcr.io/hjxwz123/voicebookfactory}:${VB_VERSION:?请在 .env 里设置 VB_VERSION，例如 0.1.0}
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
@@ -25,7 +26,7 @@ services:
     volumes: ["app-data:/data"]
 
   db:
-    image: postgres:17-alpine
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-voicebook}
@@ -39,7 +40,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
     volumes: ["redis-data:/data"]

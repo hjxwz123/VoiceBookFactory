@@ -29,6 +29,8 @@ ghcr.io/hjxwz123/voicebookfactory:latest  # 最新正式版
 ghcr.io/hjxwz123/voicebookfactory:edge    # main 分支最新构建，仅供测试
 ```
 
+**服务器在中国大陆？** GitHub 和 Docker Hub 在国内通常很慢或连不上，请先看[国内服务器部署](#国内服务器部署使用国内镜像)，把 Docker 安装源和镜像地址换成国内的，其余步骤相同。
+
 ### 服务器要求
 
 - Linux 64 位（x86_64 或 ARM64），Docker 24 以上并带 Compose 插件
@@ -50,15 +52,15 @@ docker compose version          # 能显示版本号即可
 
 ### 第二步：准备部署目录和配置
 
-只需要两个文件：`docker-compose.yml` 和 `.env`。按版本号下载（把 `v0.1.0` 换成要部署的版本）：
+只需要两个文件：`docker-compose.yml` 和 `.env`。部署文件对各个版本通用，部署哪个版本由 `.env` 里的 `VB_VERSION` 决定：
 
 ```bash
 mkdir -p /opt/voicebook && cd /opt/voicebook
-curl -fsSLO https://raw.githubusercontent.com/hjxwz123/VoiceBookFactory/v0.1.0/docker-compose.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/hjxwz123/VoiceBookFactory/v0.1.0/.env.example
+curl -fsSLO https://raw.githubusercontent.com/hjxwz123/VoiceBookFactory/main/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/hjxwz123/VoiceBookFactory/main/.env.example
 ```
 
-也可以克隆整个仓库：`git clone https://github.com/hjxwz123/VoiceBookFactory.git && cd VoiceBookFactory && cp .env.example .env`。
+也可以克隆整个仓库：`git clone https://github.com/hjxwz123/VoiceBookFactory.git && cd VoiceBookFactory && cp .env.example .env`。服务器下载不了时，在自己电脑上从仓库页面下载这两个文件，再用 `scp` 传到服务器。
 
 **生成密钥并填写 `.env`**。下面的命令会自动填好两个密钥和数据库密码：
 
@@ -329,18 +331,135 @@ Redis 负责在实例之间共享以下内容，用户连到哪个实例都一�
 
 多个实例同时启动时，会依次执行数据库迁移和初始数据写入。
 
-### 国内服务器拉取镜像慢
+### 国内服务器部署（使用国内镜像）
 
-- **给 Docker 配代理**：为 Docker 服务配置 HTTP 代理（systemd 的 `Environment=HTTPS_PROXY=...`），或者使用你信任的 ghcr.io 镜像加速服务。
-- **离线导入**：在能访问 ghcr.io 的机器上导出镜像，再拷到服务器导入：
-  ```bash
-  docker pull ghcr.io/hjxwz123/voicebookfactory:0.1.0
-  docker save ghcr.io/hjxwz123/voicebookfactory:0.1.0 | gzip > voicebook-0.1.0.tar.gz
-  # 拷到服务器后：
-  gunzip -c voicebook-0.1.0.tar.gz | docker load
+国内服务器访问 GitHub（`ghcr.io`、`raw.githubusercontent.com`）和 Docker Hub 通常很慢或连不上。部署步骤和上面完全一样，只有三处换成国内来源：Docker 安装源、部署文件、镜像地址。
+
+#### 1. 用国内源安装 Docker
+
+```bash
+curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
+sudo systemctl enable --now docker
+```
+
+`get.docker.com` 也打不开时，直接用阿里云的 Docker CE 软件源（以 Ubuntu 为例，Debian 把命令里的两处 `ubuntu` 换成 `debian`）：
+
+```bash
+sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+```
+
+#### 2. 获取部署文件
+
+服务器能访问 `raw.githubusercontent.com` 就照[第二步](#第二步准备部署目录和配置)下载；不能的话，在自己电脑上打开 https://github.com/hjxwz123/VoiceBookFactory 下载 `docker-compose.yml` 和 `.env.example`，传到服务器：
+
+```bash
+scp docker-compose.yml .env.example root@服务器IP:/opt/voicebook/
+ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
+```
+
+#### 3. 选择镜像来源
+
+应用镜像默认在 `ghcr.io`，PostgreSQL 和 Redis 默认在 Docker Hub。在 `.env` 里用三个变量把它们换成国内地址：`VB_IMAGE`（应用镜像，不带版本号）、`POSTGRES_IMAGE`、`REDIS_IMAGE`。三种方式任选一种：
+
+| 方式 | 适合 | 说明 |
+|---|---|---|
+| **A. 阿里云容器镜像服务**（推荐） | 正式运营 | 三个镜像都放在自己的阿里云仓库里，最稳定；需要先开通并同步一次 |
+| **B. 公共镜像站** | 先试试 | 不用准备，但第三方服务可能调整或限速 |
+| **C. 离线导入** | 服务器完全不能访问外网 | 在别的机器上导出镜像文件，拷到服务器导入 |
+
+**方式 A：阿里云容器镜像服务（ACR）**
+
+1. **开通**：阿里云控制台 → 容器镜像服务 → 个人实例（免费）。
+   - 选一个地域，例如华东 1（杭州），仓库地址是 `registry.cn-hangzhou.aliyuncs.com`。
+   - 创建一个命名空间，建议设为「公开」，服务器拉取时就不用登录。
+   - 在「访问凭证」里设置固定密码。
+2. **同步镜像**（二选一）：
+   - **自动同步**：在 GitHub 仓库 → Settings → Secrets and variables → Actions 里添加：
+     - Variables：`ALIYUN_NAMESPACE`（命名空间）。地域不是杭州时，再加 `ALIYUN_REGISTRY`，例如 `registry.cn-shanghai.aliyuncs.com`。
+     - Secrets：`ALIYUN_USERNAME`（阿里云账号全名）和 `ALIYUN_PASSWORD`（上面设的固定密码）。
+
+     之后 CI 每次发布镜像，都会把应用镜像（同样的版本标签）以及 `postgres:17-alpine`、`redis:7-alpine` 复制到这个命名空间。在配置之前就已经发布的版本（例如 0.1.0），请用下面的手动方式同步一次。
+   - **手动同步**：在任意一台能访问 GitHub 和 Docker Hub 的机器上（海外服务器、自己的电脑都行）执行。镜像在两个仓库之间直接复制，同时包含 amd64 和 arm64，不占本机磁盘：
+     ```bash
+     ACR=registry.cn-hangzhou.aliyuncs.com/你的命名空间
+     docker login registry.cn-hangzhou.aliyuncs.com
+     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.0 ghcr.io/hjxwz123/voicebookfactory:0.1.0
+     docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/postgres:17-alpine postgres:17-alpine
+     docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/redis:7-alpine redis:7-alpine
+     ```
+3. **在服务器的 `.env` 里填写**：
+   ```ini
+   VB_IMAGE=registry.cn-hangzhou.aliyuncs.com/你的命名空间/voicebookfactory
+   POSTGRES_IMAGE=registry.cn-hangzhou.aliyuncs.com/你的命名空间/postgres:17-alpine
+   REDIS_IMAGE=registry.cn-hangzhou.aliyuncs.com/你的命名空间/redis:7-alpine
+   ```
+   - 服务器是同一地域的阿里云 ECS 时，可以把域名换成内网地址 `registry-vpc.cn-hangzhou.aliyuncs.com`，速度更快，也不走公网流量。
+   - 命名空间设为私有的话，先在服务器上 `docker login registry.cn-hangzhou.aliyuncs.com`。
+   - 以后升级：先确认新版本已经同步到阿里云，再改 `VB_VERSION`。
+
+**方式 B：公共镜像站**
+
+- **应用镜像**：南京大学开源镜像站代理了 ghcr.io，已验证能拉取 0.1.0 的 amd64 和 arm64：
+  ```ini
+  VB_IMAGE=ghcr.nju.edu.cn/hjxwz123/voicebookfactory
   ```
-  PostgreSQL 和 Redis 镜像（`postgres:17-alpine`、`redis:7-alpine`）可以用同样方法导入。注意服务器和导出机器的 CPU 架构要一致（`--platform linux/arm64` 可以指定）。
-- **在服务器上自己构建**：克隆仓库后执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。
+- **PostgreSQL 和 Redis**（来自 Docker Hub）：给 Docker 配置一个你能用的镜像加速器，例如阿里云控制台「容器镜像服务 → 镜像工具 → 镜像加速器」给出的专属地址。部分云厂商的加速器只能在自家服务器上使用。配置方法：
+  ```bash
+  sudo mkdir -p /etc/docker
+  echo '{ "registry-mirrors": ["https://你的加速器地址"] }' | sudo tee /etc/docker/daemon.json
+  sudo systemctl restart docker
+  ```
+  加速器只对 Docker Hub 镜像生效，对 ghcr.io 不起作用，所以应用镜像仍然要用上面的 `VB_IMAGE`。
+- 公共镜像站随时可能调整，拉取失败时请换成方式 A 或 C。
+
+**方式 C：离线导入**
+
+在能访问外网的机器上导出三个镜像：
+
+```bash
+docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.0
+docker pull --platform linux/amd64 postgres:17-alpine
+docker pull --platform linux/amd64 redis:7-alpine
+docker save ghcr.io/hjxwz123/voicebookfactory:0.1.0 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
+```
+
+- 服务器是 ARM 架构时，把 `linux/amd64` 换成 `linux/arm64`。
+- 把文件拷到服务器后执行 `gunzip -c voicebook-images.tar.gz | docker load`。
+- 这种方式 `.env` 里不用改镜像地址。
+
+#### 4. 拉取并启动
+
+```bash
+cd /opt/voicebook
+docker compose pull        # 能看到每个镜像的下载进度，确认都来自国内地址
+docker compose up -d
+docker compose ps
+```
+
+之后按[第四步](#第四步配置域名和-https)、[第五步](#第五步在管理后台完成初始化)继续配置。在国内运营时，管理后台接入的 AI 服务请选国内能直接访问的平台，例如 DeepSeek、通义千问、MiniMax，或者可以访问的中转服务。
+
+#### 在国内服务器上从源码构建镜像
+
+不想依赖任何镜像仓库时，可以在服务器上自己构建镜像。克隆仓库后，在 `.env` 里打开这些国内源，构建时就会从 npmmirror、goproxy.cn 和阿里云 Debian 镜像下载依赖：
+
+```ini
+BUILD_NPM_REGISTRY=https://registry.npmmirror.com
+BUILD_GOPROXY=https://goproxy.cn,direct
+BUILD_APT_MIRROR=mirrors.aliyun.com
+# 基础镜像（node、golang、debian）也拉不下来时，同样换成可以访问的地址：
+# BUILD_NODE_IMAGE=…/node:24-slim   BUILD_GO_IMAGE=…/golang:1.27   BUILD_RUNTIME_IMAGE=…/debian:trixie-slim
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+构建需要 2 GB 以上可用内存，整个过程大约几分钟到十几分钟。
 
 ### 常见问题
 
