@@ -1,0 +1,253 @@
+name: CI
+
+# Every push and pull request: Go tests on SQLite and on PostgreSQL + Redis, the web build, and an
+# end-to-end run of two instances sharing PostgreSQL + Redis. Pushes to main publish the image as
+# :edge; a tag vX.Y.Z (matching the VERSION file) publishes :X.Y.Z, :X.Y and :latest and creates the
+# GitHub release. Nothing is published unless every check passed.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  IMAGE: ghcr.io/hjxwz123/voicebookfactory
+  PG_DSN: host=localhost port=5432 user=voicebook password=voicebook dbname=voicebook sslmode=disable TimeZone=UTC
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Check that VERSION, the Go default, package.json and the tag agree
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          echo "VERSION file: $v"
+          grep -Eq "Version +=  *\"$v\"" server/internal/version/version.go || { echo "::error::server/internal/version/version.go does not say $v"; exit 1; }
+          [ "$(node -p "require('./web/package.json').version")" = "$v" ] || { echo "::error::web/package.json version is not $v"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            [ "${GITHUB_REF_NAME#v}" = "$v" ] || { echo "::error::tag $GITHUB_REF_NAME does not match VERSION $v"; exit 1; }
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$v" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "version=$v-edge.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  go-sqlite:
+    name: Go tests (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - working-directory: server
+        run: |
+          test -z "$(gofmt -l cmd internal/bus internal/db internal/version)" || { gofmt -l cmd internal/bus internal/db internal/version; exit 1; }
+          go vet ./...
+          go test -count=1 ./...
+
+  go-postgres-redis:
+    name: Go tests (PostgreSQL + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: voicebook, POSTGRES_PASSWORD: voicebook, POSTGRES_DB: voicebook }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U voicebook" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      VB_TEST_PG_DSN: ${{ env.PG_DSN }}
+      VB_TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - working-directory: server
+        run: go test -count=1 ./...
+
+  web:
+    name: Web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
+      - working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+  e2e:
+    name: End to end (2 instances, PostgreSQL + Redis)
+    runs-on: ubuntu-latest
+    needs: version
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: voicebook, POSTGRES_PASSWORD: voicebook, POSTGRES_DB: voicebook }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U voicebook" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      VB_DB_DRIVER: postgres
+      VB_DB_DSN: ${{ env.PG_DSN }}
+      VB_REDIS_URL: redis://localhost:6379/0
+      VB_DATA_DIR: /tmp/vb/data
+      VB_DEV: "true" # the scripts read verification codes from dev-mode responses
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Build
+        working-directory: server
+        run: mkdir -p /tmp/vb && go build -o /tmp/vb/voicebook ./cmd/voicebook && /tmp/vb/voicebook version
+      - name: Start the fake AI service and two instances
+        working-directory: server
+        run: |
+          nohup python3 scripts/fake_llm.py > /tmp/vb/fake_llm.log 2>&1 &
+          VB_ADDR=:18080 VB_PUBLIC_URL=http://localhost:18080 nohup /tmp/vb/voicebook serve > /tmp/vb/a.log 2>&1 &
+          VB_ADDR=:18081 VB_PUBLIC_URL=http://localhost:18081 nohup /tmp/vb/voicebook serve > /tmp/vb/b.log 2>&1 &
+          for port in 18080 18081; do
+            for i in $(seq 1 180); do
+              curl -fs "http://localhost:$port/healthz" | grep -q '"seeding":false' && break
+              sleep 1
+            done
+            curl -fs "http://localhost:$port/healthz" || { echo "instance on $port did not come up"; exit 1; }
+            echo
+          done
+      - name: Smoke test
+        working-directory: server
+        run: VB_BASE=http://localhost:18080 python3 scripts/smoke.py scripts/sample.txt
+      - name: Full feature test
+        working-directory: server
+        run: VB_BASE=http://localhost:18080 python3 scripts/full_smoke.py
+      - name: Cluster check (events, rate limits and caches shared through Redis)
+        working-directory: server
+        run: VB_A=http://localhost:18080 VB_B=http://localhost:18081 VB_EXPECT_VERSION=$(cat ../VERSION) python3 scripts/cluster_check.py
+      - name: Server logs
+        if: always()
+        run: |
+          for f in a b fake_llm; do echo "===== $f"; tail -n 120 /tmp/vb/$f.log; done
+          grep -h -E 'level=(ERROR|WARN)' /tmp/vb/a.log /tmp/vb/b.log | head -50 || true
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: [version, go-sqlite, go-postgres-redis, web, e2e]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ needs.version.outputs.release == 'true' }}
+            type=edge,branch=main
+            type=sha,prefix=sha-
+      - id: time
+        run: echo "now=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.time.outputs.now }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Deploy the pushed image with docker compose (PostgreSQL + Redis) and check it
+        run: |
+          tag=sha-${GITHUB_SHA::7}
+          cat > .env <<EOF
+          VB_VERSION=$tag
+          VB_PORT=8080
+          VB_PUBLIC_URL=http://localhost:8080
+          VB_JWT_SECRET=$(openssl rand -hex 32)
+          VB_SECRET_KEY=$(openssl rand -hex 32)
+          POSTGRES_PASSWORD=$(openssl rand -hex 16)
+          VB_ADMIN_PASSWORD=Ci#$(openssl rand -hex 6)
+          EOF
+          docker compose up -d
+          for i in $(seq 1 90); do
+            curl -fs http://localhost:8080/healthz | grep -q '"ok":true' && break
+            sleep 2
+          done
+          h=$(curl -fs http://localhost:8080/healthz) || { docker compose logs app; exit 1; }
+          echo "$h"
+          echo "$h" | grep -q "\"version\":\"${{ needs.version.outputs.version }}\"" || { echo "::error::wrong version"; exit 1; }
+          echo "$h" | grep -q '"db":"postgres"' && echo "$h" | grep -q '"bus":"redis"' || { echo "::error::not on PostgreSQL + Redis"; exit 1; }
+          curl -fs http://localhost:8080/ | grep -q '<div id="root">' || { echo "::error::web app not served"; exit 1; }
+          docker compose ps
+          docker compose down -v
+
+  release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    needs: [version, docker]
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          awk -v v="$V" '$0 ~ "^## \\[?"v"\\]?" {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
+          cat >> notes.md <<EOF
+
+          ## 部署
+
+          \`\`\`bash
+          docker pull ${IMAGE}:${V}
+          # 或在 .env 里设置 VB_VERSION=${V}，然后
+          docker compose up -d
+          \`\`\`
+          镜像支持 linux/amd64 与 linux/arm64，标签：\`${V}\`、\`${V%.*}\`、\`latest\`。
+          EOF
+          gh release create "v$V" --title "v$V" --notes-file notes.md --verify-tag

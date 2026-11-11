@@ -1,0 +1,55 @@
+# 声书工坊 VoiceBook Factory — production deployment: the app, PostgreSQL and Redis.
+#
+#   cp .env.example .env        # fill in the passwords and secrets
+#   docker compose up -d        # runs the version named by VB_VERSION in .env
+#
+# Upgrade or roll back by changing VB_VERSION (e.g. 0.1.0) and running `docker compose up -d` again.
+# Images: ghcr.io/hjxwz123/voicebookfactory:<version> (also :<major>.<minor> and :latest).
+name: voicebook
+
+services:
+  app:
+    image: ghcr.io/hjxwz123/voicebookfactory:${VB_VERSION:?请在 .env 里设置 VB_VERSION，例如 0.1.0}
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["${VB_PORT:-8080}:8080"]
+    env_file: [.env]
+    environment:
+      VB_DEV: "false"
+      VB_DATA_DIR: /data
+      VB_DB_DRIVER: postgres
+      VB_DB_DSN: host=db port=5432 user=${POSTGRES_USER:-voicebook} password=${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD} dbname=${POSTGRES_DB:-voicebook} sslmode=disable TimeZone=UTC
+      VB_REDIS_URL: redis://redis:6379/0
+    volumes: ["app-data:/data"]
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voicebook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-voicebook}
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  app-data:   # uploaded books, audio and exports (or only a cache when 阿里云 OSS is configured)
+  pg-data:
+  redis-data:

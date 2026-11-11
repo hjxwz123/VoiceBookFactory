@@ -1,0 +1,28 @@
+# runtime data: databases, uploaded books and audio, backups
+server/data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# builds
+server/bin/
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# secrets and local settings
+.env
+.env.*
+!.env.example
+server/.env
+
+# tools and caches
+.taste-skill/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
