@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, HelpCircle, IconContext, Loader2, X } from '@/components/icons'
 import React, { createContext, forwardRef, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
+import { copy } from '@/lib/format'
 
 export const cn = clsx
 
@@ -835,18 +836,20 @@ export function Table({ children, className }: { children: React.ReactNode; clas
 }
 
 export function Copyable({ text, className }: { text: string; className?: string }) {
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState<boolean | null>(false) // null: copying failed
   return (
     <button
       className={cn('inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-sunken px-2 py-1 text-left text-xs text-muted hover:text-ink', className)}
       onClick={() => {
-        navigator.clipboard?.writeText(text)
-        setDone(true)
-        setTimeout(() => setDone(false), 1500)
+        copy(text).then(
+          () => setDone(true),
+          () => setDone(null),
+        )
+        setTimeout(() => setDone(false), 1800)
       }}
     >
       <span className="truncate">{text}</span>
-      <span className="shrink-0 text-accent">{done ? '已复制' : '复制'}</span>
+      <span className={cn('shrink-0', done === null ? 'text-danger' : 'text-accent')}>{done ? '已复制' : done === null ? '复制失败，请手动选择' : '复制'}</span>
     </button>
   )
 }

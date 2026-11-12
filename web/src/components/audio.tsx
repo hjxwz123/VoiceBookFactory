@@ -154,7 +154,9 @@ export function Recorder({ onDone, countdown = true, compact }: { onDone: (blob:
         }, 700)
       } else start()
     } catch {
-      alert('无法使用麦克风：请在浏览器地址栏允许麦克风权限（需要 HTTPS 或 localhost）')
+      // browsers only allow the microphone on HTTPS (and localhost)
+      if (!window.isSecureContext) alert('当前是通过 http 访问（例如直接用 IP 打开），浏览器不允许网页使用麦克风。请通过 HTTPS 域名访问后再录音；也可以录好后用「上传」。')
+      else alert('无法使用麦克风：请在浏览器地址栏允许本网站使用麦克风，并确认电脑接了麦克风。')
     }
   }
   const stop = () => {

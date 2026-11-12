@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Combine, Copy, Drama, Flag, GripVert
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import { emotionName, emotions, segTypeName } from '@/lib/format'
+import { copy, emotionName, emotions, segTypeName } from '@/lib/format'
 import { PlayButton } from '@/components/audio'
 import { usePlayer } from '@/lib/player'
 import { Button, cn, confirm, Dialog, Kbd, Menu, type MenuItem, Popover, Spinner, Tip } from '@/components/ui'
@@ -159,7 +159,7 @@ export default function ScriptList({ book, chapterId, segs, chars }: { book: any
       editable && { label: multi ? `上移 ${ids.length} 句` : '上移', icon: <ArrowUp />, hint: `${ALT}+↑`, disabled: order.indexOf(ids[0]) === 0, onSelect: () => moveBy(chapterId, segs, ids, -1) },
       editable && { label: multi ? `下移 ${ids.length} 句` : '下移', icon: <ArrowDown />, hint: `${ALT}+↓`, disabled: order.indexOf(ids[ids.length - 1]) === order.length - 1, onSelect: () => moveBy(chapterId, segs, ids, 1) },
       'sep',
-      { label: multi ? `复制 ${ids.length} 句文字` : '复制文字', icon: <Copy />, onSelect: () => navigator.clipboard?.writeText(texts).then(() => toast.success('已复制到剪贴板'), () => toast.error('复制失败，请手动选择文字复制')) },
+      { label: multi ? `复制 ${ids.length} 句文字` : '复制文字', icon: <Copy />, onSelect: () => copy(texts).then(() => toast.success('已复制到剪贴板'), () => toast.error('复制失败，请手动选择文字复制')) },
       editable && { label: multi ? `删除 ${ids.length} 句` : '删除', icon: <Trash2 />, hint: 'Delete', danger: true, onSelect: () => deleteSegments(book.id, chapterId, ids.filter((x) => !segs.find((y) => y.id === x)?.locked)) },
     ])
   }

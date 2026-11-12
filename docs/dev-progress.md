@@ -632,6 +632,30 @@ python3 scripts/ai_smoke.py scripts/sample.txt
 - 两个实例共用 SQLite 文件和内存版 Redis 时，`cluster_check.py` 11 项全部通过。
 - PostgreSQL 与 Redis 的真实验证在 GitHub Actions 上进行。
 
+## 修复：IP 访问刷新后需要重新登录（2026-11-12）
+
+- **原因**：
+  - 刷新令牌 cookie 的 `Secure` 原来按 `VB_PUBLIC_URL` 是否以 https 开头决定，而 `.env.example` 默认就是 https 地址。
+  - 用 `http://IP:8080` 访问时，浏览器拒绝保存 Secure cookie，页面刷新后 `/auth/refresh` 返回 401。
+  - Chrome 把 localhost 当作安全来源，所以在本机测不出来。
+- **修复**：新增 `secureCookie(r)`，按请求本身判断是否为 HTTPS，依次看：
+  - 连接是否是 TLS；
+  - `X-Forwarded-Proto` 或 RFC 7239 的 `Forwarded: proto=`；
+  - 代理两个头都不发时，请求的 Host 是否就是 https `VB_PUBLIC_URL` 的域名。
+
+  用户端和后台的刷新令牌 cookie、OAuth 流程 cookie 都改用它，清除 cookie 时也带同样的属性。
+- **前端**：
+  - `copy()` 在非安全来源上改用隐藏 textarea 加 `execCommand('copy')` 复制。在弹窗里使用时，textarea 放进弹窗内部，避开焦点锁定。`Copyable` 和画本右键「复制文字」都改用它，失败时有提示。
+  - 录音在非安全来源上提示需要 HTTPS，或者改用上传。
+- **验证**：
+  - `internal/api/cookie_test.go` 覆盖 10 种请求。
+  - 用无头 Chrome 访问本机内网 IP（非安全来源）上的生产模式实例（`VB_PUBLIC_URL=https://…`）：
+    - 旧版：cookie 没有被保存，刷新后掉线，refresh 返回 401；
+    - 新版：cookie 被保存（不带 Secure），刷新后仍然登录，refresh 返回 200；
+    - 带 `X-Forwarded-Proto: https` 时，Set-Cookie 带 Secure；
+    - 后台刷新后保持登录；
+    - 真实点击复制按钮后粘贴，得到的内容一致。
+
 ## 国内服务器部署（2026-11-11）
 
 - GitHub 上唯一失败的一次构建是首个提交的工作流文件写法错误：job 级 env 里不能引用 `env` 上下文。下一个提交已经修复，之后 main 和 v0.1.0 的构建全部通过。

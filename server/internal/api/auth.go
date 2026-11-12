@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -55,20 +56,46 @@ func withQuery(path, k, v string) string {
 	return path + sep + k + "=" + urlEscape(v)
 }
 
-func (s *Server) setRefresh(w http.ResponseWriter, kind string, pair *core.TokenPair) {
-	name, path := cookieStudio, "/api/v1/auth"
-	if kind == "admin" {
-		name, path = cookieAdmin, "/api/admin/v1/auth"
+// secureCookie reports whether cookies for this request may be marked Secure: only when the browser
+// reached us over HTTPS. A Secure cookie set over plain http (opening the site as http://IP:8080) is
+// dropped by the browser, so the session would be lost on the next page load.
+//
+// HTTPS is known from the connection itself, from a reverse proxy's X-Forwarded-Proto / Forwarded
+// header, or, for proxies that send neither, from the request being for the host of an https
+// VB_PUBLIC_URL (people reach that address through the proxy, never by plain http).
+func (s *Server) secureCookie(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
 	}
-	http.SetCookie(w, &http.Cookie{Name: name, Value: pair.RefreshToken, Path: path, Expires: pair.RefreshExp, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.app.Cfg.PublicURL, "https")})
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		return strings.EqualFold(strings.TrimSpace(strings.Split(p, ",")[0]), "https")
+	}
+	if f := r.Header.Get("Forwarded"); f != "" {
+		for _, part := range strings.Split(strings.Split(f, ",")[0], ";") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(part), "="); ok && strings.EqualFold(k, "proto") {
+				return strings.EqualFold(strings.Trim(v, `"`), "https")
+			}
+		}
+	}
+	pub, err := url.Parse(s.app.Cfg.PublicURL)
+	return err == nil && pub.Scheme == "https" && strings.EqualFold(strings.TrimSuffix(r.Host, ":443"), pub.Host)
 }
 
-func (s *Server) clearRefresh(w http.ResponseWriter, kind string) {
-	name, path := cookieStudio, "/api/v1/auth"
+func refreshCookie(kind string) (name, path string) {
 	if kind == "admin" {
-		name, path = cookieAdmin, "/api/admin/v1/auth"
+		return cookieAdmin, "/api/admin/v1/auth"
 	}
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, MaxAge: -1, HttpOnly: true})
+	return cookieStudio, "/api/v1/auth"
+}
+
+func (s *Server) setRefresh(w http.ResponseWriter, r *http.Request, kind string, pair *core.TokenPair) {
+	name, path := refreshCookie(kind)
+	http.SetCookie(w, &http.Cookie{Name: name, Value: pair.RefreshToken, Path: path, Expires: pair.RefreshExp, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookie(r)})
+}
+
+func (s *Server) clearRefresh(w http.ResponseWriter, r *http.Request, kind string) {
+	name, path := refreshCookie(kind)
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookie(r)})
 }
 
 func userView(u *model.User) map[string]any {
@@ -84,8 +111,8 @@ func userView(u *model.User) map[string]any {
 	}
 }
 
-func (s *Server) authResponse(w http.ResponseWriter, kind string, u *model.User, pair *core.TokenPair) {
-	s.setRefresh(w, kind, pair)
+func (s *Server) authResponse(w http.ResponseWriter, r *http.Request, kind string, u *model.User, pair *core.TokenPair) {
+	s.setRefresh(w, r, kind, pair)
 	ok(w, map[string]any{"accessToken": pair.AccessToken, "expiresAt": pair.ExpiresAt, "user": userView(u)})
 }
 
@@ -152,7 +179,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			fail(w, err)
 			return
 		}
-		s.authResponse(w, "studio", u, pair)
+		s.authResponse(w, r, "studio", u, pair)
 	})
 	r.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -171,7 +198,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 		if in.Agree {
 			u.LegalVersion = s.app.AgreeLegal(u.ID)
 		}
-		s.authResponse(w, "studio", u, pair)
+		s.authResponse(w, r, "studio", u, pair)
 	})
 	r.Post("/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
 		c, _ := r.Cookie(cookieStudio)
@@ -181,11 +208,11 @@ func (s *Server) publicRoutes(r chi.Router) {
 		}
 		u, pair, err := s.app.Refresh(val, "studio", r.UserAgent(), clientIP(r))
 		if err != nil {
-			s.clearRefresh(w, "studio")
+			s.clearRefresh(w, r, "studio")
 			fail(w, err)
 			return
 		}
-		s.authResponse(w, "studio", u, pair)
+		s.authResponse(w, r, "studio", u, pair)
 	})
 	r.Post("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, _ := r.Cookie(cookieStudio); c != nil {
@@ -194,7 +221,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 				s.app.RevokeSession(sess.UserID, sess.ID)
 			}
 		}
-		s.clearRefresh(w, "studio")
+		s.clearRefresh(w, r, "studio")
 		ok(w, nil)
 	})
 	r.Post("/auth/phone/code", h(func(r *http.Request) (any, error) {
@@ -232,7 +259,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 		if in.Agree {
 			u.LegalVersion = s.app.AgreeLegal(u.ID)
 		}
-		s.authResponse(w, "studio", u, pair)
+		s.authResponse(w, r, "studio", u, pair)
 	})
 	r.Get("/auth/oauth/{provider}/start", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -249,7 +276,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			s.oauthFailed(w, r, redirect, bindUser != "", err)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: cookieOAuth, Value: cookie, Path: oauthCookiePath, MaxAge: int(core.OAuthFlowTTL.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.app.Cfg.PublicURL, "https")})
+		http.SetCookie(w, &http.Cookie{Name: cookieOAuth, Value: cookie, Path: oauthCookiePath, MaxAge: int(core.OAuthFlowTTL.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookie(r)})
 		http.Redirect(w, r, u, http.StatusFound)
 	})
 	r.Get("/auth/oauth/{provider}/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +284,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 		if c, _ := r.Cookie(cookieOAuth); c != nil {
 			flow = c.Value
 		}
-		http.SetCookie(w, &http.Cookie{Name: cookieOAuth, Value: "", Path: oauthCookiePath, MaxAge: -1, HttpOnly: true})
+		http.SetCookie(w, &http.Cookie{Name: cookieOAuth, Value: "", Path: oauthCookiePath, MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookie(r)})
 		res, err := s.app.OAuthFinish(r.Context(), param(r, "provider"), r.URL.Query(), flow, s.sessionUserID(r), r.UserAgent(), clientIP(r))
 		if err != nil {
 			redirect, bind := s.app.OAuthFlowRedirect(flow)
@@ -268,7 +295,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			http.Redirect(w, r, withQuery(res.Redirect, "oauth", "bound"), http.StatusFound)
 			return
 		}
-		s.setRefresh(w, "studio", res.Pair)
+		s.setRefresh(w, r, "studio", res.Pair)
 		http.Redirect(w, r, "/oauth/done?next="+urlEscape(res.Redirect), http.StatusFound)
 	})
 	r.Post("/auth/reset", h(func(r *http.Request) (any, error) {
@@ -564,7 +591,7 @@ func (s *Server) adminAuthRoutes(r chi.Router) {
 			return
 		}
 		s.app.Audit(u.ID, "admin.login", "user", u.ID, "", clientIP(r), nil)
-		s.authResponse(w, "admin", u, pair)
+		s.authResponse(w, r, "admin", u, pair)
 	})
 	r.Post("/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
 		c, _ := r.Cookie(cookieAdmin)
@@ -574,14 +601,14 @@ func (s *Server) adminAuthRoutes(r chi.Router) {
 		}
 		u, pair, err := s.app.Refresh(val, "admin", r.UserAgent(), clientIP(r))
 		if err != nil || !u.IsAdmin() {
-			s.clearRefresh(w, "admin")
+			s.clearRefresh(w, r, "admin")
 			if err == nil {
 				err = core.Forbidden("没有管理后台权限")
 			}
 			fail(w, err)
 			return
 		}
-		s.authResponse(w, "admin", u, pair)
+		s.authResponse(w, r, "admin", u, pair)
 	})
 	r.Post("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, _ := r.Cookie(cookieAdmin); c != nil {
@@ -590,7 +617,7 @@ func (s *Server) adminAuthRoutes(r chi.Router) {
 				s.app.RevokeSession(sess.UserID, sess.ID)
 			}
 		}
-		s.clearRefresh(w, "admin")
+		s.clearRefresh(w, r, "admin")
 		ok(w, nil)
 	})
 }

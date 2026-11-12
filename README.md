@@ -93,7 +93,7 @@ docker compose ps          # app、db、redis 都显示 healthy 即启动完成
 curl http://127.0.0.1:8080/healthz
 ```
 
-`/healthz` 的返回里应能看到 `"version":"0.1.0"`、`"db":"postgres"`、`"bus":"redis"`。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
+`/healthz` 的返回里应能看到 `"version":"0.1.0"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
 
 启动失败时用 `docker compose logs app` 查看原因，见下方[常见问题](#常见问题)。
 
@@ -469,6 +469,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 | `docker compose up` 提示 `required variable ... is missing a value` | `.env` 里缺少必填项（`VB_VERSION`、`POSTGRES_PASSWORD`），或者 `.env` 不在 `docker-compose.yml` 同一目录 |
 | app 日志里数据库认证失败（password authentication failed） | 数据库第一次初始化后又改了 `POSTGRES_PASSWORD`。把它改回原来的值；或者在库里修改密码：`docker compose exec db psql -U voicebook -c "ALTER USER voicebook PASSWORD '新密码'"` |
 | `port is already allocated` | 端口被占用，修改 `.env` 里的 `VB_PORT` |
+| 用 `http://IP:端口` 访问，登录后一刷新就要重新登录 | 0.1.0 的问题：`VB_PUBLIC_URL` 是 https 地址时，登录 cookie 被标记为仅限 HTTPS，浏览器在 http 访问时不保存。下一个版本已修复（`edge` 镜像已包含修复），升级即可；仍在用 0.1.0 时，可以先把 `VB_PUBLIC_URL` 改成实际访问地址（如 `http://IP:8080`），再执行 `docker compose up -d` |
+| 用 `http://IP` 访问时不能录音 | 浏览器只允许 HTTPS 页面（和 localhost）使用麦克风。按第四步配置域名和 HTTPS；临时可以录好音频后用「上传」 |
 | 页面里任务进度不更新 | 反向代理缓冲了 SSE，按第四步关闭 `/api/v1/events` 的缓冲 |
 | 上传大文件失败（413） | 反向代理上传限制太小，调大 Nginx 的 `client_max_body_size` |
 | 用户收不到验证码邮件，找回密码用不了 | 后台「系统设置 → 邮件」没有配置 SMTP |

@@ -78,6 +78,31 @@ export const featureName: Record<string, string> = {
   voice_clone: '声音克隆', sfx: 'AI 音效', music: 'AI 配乐', image: 'AI 封面', asr_align: '智能对轨', asr_review: '智能审听', moderation: '内容审核', quick_tts: '快速配音',
 }
 
-export function copy(text: string) {
-  return navigator.clipboard?.writeText(text)
+/** Copies text. The clipboard API only exists on HTTPS (and localhost); when the site is opened by plain
+ *  http, e.g. http://IP:8080, it falls back to selecting a hidden textarea. Rejects if neither works. */
+export async function copy(text: string): Promise<void> {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // permission denied or document not focused: try the fallback below
+    }
+  }
+  // inside a dialog the textarea must live in the dialog, or its focus trap pulls the selection away
+  const host = (document.activeElement?.closest('[role=dialog]') as HTMLElement | null) ?? document.body
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  Object.assign(ta.style, { position: 'fixed', top: '0', left: '-9999px', opacity: '0' })
+  host.appendChild(ta)
+  ta.focus({ preventScroll: true })
+  ta.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } finally {
+    ta.remove()
+  }
+  if (!ok) throw new Error('copy failed')
 }
