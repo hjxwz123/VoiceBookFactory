@@ -23,7 +23,7 @@ AI 有声书工作台：导入书稿，AI 分析角色、生成画本（演播�
 镜像发布在 GitHub Container Registry，公开可拉取，支持 linux/amd64 和 linux/arm64。每个版本有自己的标签：
 
 ```
-ghcr.io/hjxwz123/voicebookfactory:0.1.0   # 指定版本（推荐，部署和回滚都按版本号）
+ghcr.io/hjxwz123/voicebookfactory:0.1.1   # 指定版本（推荐，部署和回滚都按版本号）
 ghcr.io/hjxwz123/voicebookfactory:0.1     # 0.1.x 系列的最新版
 ghcr.io/hjxwz123/voicebookfactory:latest  # 最新正式版
 ghcr.io/hjxwz123/voicebookfactory:edge    # main 分支最新构建，仅供测试
@@ -74,7 +74,7 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 | 配置 | 说明 |
 |---|---|
-| `VB_VERSION` | 要部署的版本，例如 `0.1.0`。升级和回滚只改这里 |
+| `VB_VERSION` | 要部署的版本，例如 `0.1.1`。升级和回滚只改这里 |
 | `VB_PUBLIC_URL` | 用户访问的地址，例如 `https://voicebook.example.com`。邮件链接、分享链接和第三方登录回调都会用到，必须和实际访问地址一致 |
 | `VB_PORT` | 应用在宿主机上监听的端口，默认 `8080`。前面有 Nginx / Caddy 时建议写 `127.0.0.1:8080`，只允许本机访问 |
 | `VB_JWT_SECRET` | 登录令牌签名密钥，必填 |
@@ -93,7 +93,7 @@ docker compose ps          # app、db、redis 都显示 healthy 即启动完成
 curl http://127.0.0.1:8080/healthz
 ```
 
-`/healthz` 的返回里应能看到 `"version":"0.1.0"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
+`/healthz` 的返回里应能看到 `"version":"0.1.1"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
 
 启动失败时用 `docker compose logs app` 查看原因，见下方[常见问题](#常见问题)。
 
@@ -185,7 +185,11 @@ docker compose exec app /app/voicebook version       # 确认版本
 ```
 
 - 数据库结构在启动时自动迁移。
-- 新版本的 `docker-compose.yml` 或 `.env.example` 有变化时，Release 说明里会写明，按说明更新即可。
+- 新版本的 `docker-compose.yml` 或 `.env.example` 有变化时，Release 说明里会写明。更新部署文件的方法：先备份，再重新下载 `docker-compose.yml`（`.env` 保留不动，只把新增的配置项从 `.env.example` 抄过来）：
+  ```bash
+  cp docker-compose.yml docker-compose.yml.bak
+  curl -fsSLO https://raw.githubusercontent.com/hjxwz123/VoiceBookFactory/main/docker-compose.yml
+  ```
 - 回滚就是把 `VB_VERSION` 改回旧版本再执行 `docker compose up -d`。迁移只会新增表和字段，旧版本一般可以直接运行；如果新版本说明里写了不能回滚，请用升级前的备份恢复。
 
 ### 备份与恢复
@@ -250,7 +254,7 @@ docker run -d --name voicebook --restart unless-stopped \
   -e VB_JWT_SECRET=$(openssl rand -hex 32) \
   -e VB_SECRET_KEY=$(openssl rand -hex 32) \
   -e VB_ADMIN_PASSWORD='换成你的管理员密码' \
-  ghcr.io/hjxwz123/voicebookfactory:0.1.0
+  ghcr.io/hjxwz123/voicebookfactory:0.1.1
 ```
 
 - 数据库和文件都在 `voicebook-data` 卷里。
@@ -264,7 +268,7 @@ docker run -d --name voicebook --restart unless-stopped \
 
 ```bash
 git clone https://github.com/hjxwz123/VoiceBookFactory.git && cd VoiceBookFactory
-git checkout v0.1.0
+git checkout v0.1.1
 (cd web && npm ci && npm run build)
 (cd server && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X voicebook/internal/version.Version=$(cat ../VERSION)" -o voicebook ./cmd/voicebook)
 sudo mkdir -p /opt/voicebook/data
@@ -388,7 +392,7 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
      ```bash
      ACR=registry.cn-hangzhou.aliyuncs.com/你的命名空间
      docker login registry.cn-hangzhou.aliyuncs.com
-     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.0 ghcr.io/hjxwz123/voicebookfactory:0.1.0
+     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.1 ghcr.io/hjxwz123/voicebookfactory:0.1.1
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/postgres:17-alpine postgres:17-alpine
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/redis:7-alpine redis:7-alpine
      ```
@@ -422,10 +426,10 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
 在能访问外网的机器上导出三个镜像：
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.0
+docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.1
 docker pull --platform linux/amd64 postgres:17-alpine
 docker pull --platform linux/amd64 redis:7-alpine
-docker save ghcr.io/hjxwz123/voicebookfactory:0.1.0 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
+docker save ghcr.io/hjxwz123/voicebookfactory:0.1.1 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
 ```
 
 - 服务器是 ARM 架构时，把 `linux/amd64` 换成 `linux/arm64`。
@@ -469,7 +473,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 | `docker compose up` 提示 `required variable ... is missing a value` | `.env` 里缺少必填项（`VB_VERSION`、`POSTGRES_PASSWORD`），或者 `.env` 不在 `docker-compose.yml` 同一目录 |
 | app 日志里数据库认证失败（password authentication failed） | 数据库第一次初始化后又改了 `POSTGRES_PASSWORD`。把它改回原来的值；或者在库里修改密码：`docker compose exec db psql -U voicebook -c "ALTER USER voicebook PASSWORD '新密码'"` |
 | `port is already allocated` | 端口被占用，修改 `.env` 里的 `VB_PORT` |
-| 用 `http://IP:端口` 访问，登录后一刷新就要重新登录 | 0.1.0 的问题：`VB_PUBLIC_URL` 是 https 地址时，登录 cookie 被标记为仅限 HTTPS，浏览器在 http 访问时不保存。下一个版本已修复（`edge` 镜像已包含修复），升级即可；仍在用 0.1.0 时，可以先把 `VB_PUBLIC_URL` 改成实际访问地址（如 `http://IP:8080`），再执行 `docker compose up -d` |
+| 用 `http://IP:端口` 访问，登录后一刷新就要重新登录 | 0.1.0 的问题：`VB_PUBLIC_URL` 是 https 地址时，登录 cookie 被标记为仅限 HTTPS，浏览器在 http 访问时不保存。0.1.1 已修复，按[升级与回滚](#升级与回滚)升级即可；仍在用 0.1.0 时，可以先把 `VB_PUBLIC_URL` 改成实际访问地址（如 `http://IP:8080`），再执行 `docker compose up -d` |
 | 用 `http://IP` 访问时不能录音 | 浏览器只允许 HTTPS 页面（和 localhost）使用麦克风。按第四步配置域名和 HTTPS；临时可以录好音频后用「上传」 |
 | 页面里任务进度不更新 | 反向代理缓冲了 SSE，按第四步关闭 `/api/v1/events` 的缓冲 |
 | 上传大文件失败（413） | 反向代理上传限制太小，调大 Nginx 的 `client_max_body_size` |

@@ -2,7 +2,7 @@
 
 版本号遵循语义化版本：`主版本.次版本.修订号`。
 
-## [Unreleased]
+## [0.1.1] - 2026-11-12
 
 ### 修复
 - 用 `http://IP:端口` 访问时，登录后刷新页面需要重新登录。原因是登录 cookie 是否标记为仅限 HTTPS，是按 `VB_PUBLIC_URL` 判断的。现在改为按这次请求实际是否通过 HTTPS 到达来判断：直接 TLS、反向代理的 `X-Forwarded-Proto` / `Forwarded`，或者请求的正是 https 公开域名。经反向代理的 HTTPS 访问仍然带 Secure。
