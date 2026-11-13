@@ -23,7 +23,7 @@ AI 有声书工作台：导入书稿，AI 分析角色、生成画本（演播�
 镜像发布在 GitHub Container Registry，公开可拉取，支持 linux/amd64 和 linux/arm64。每个版本有自己的标签：
 
 ```
-ghcr.io/hjxwz123/voicebookfactory:0.1.2   # 指定版本（推荐，部署和回滚都按版本号）
+ghcr.io/hjxwz123/voicebookfactory:0.1.3   # 指定版本（推荐，部署和回滚都按版本号）
 ghcr.io/hjxwz123/voicebookfactory:0.1     # 0.1.x 系列的最新版
 ghcr.io/hjxwz123/voicebookfactory:latest  # 最新正式版
 ghcr.io/hjxwz123/voicebookfactory:edge    # main 分支最新构建，仅供测试
@@ -74,7 +74,7 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 | 配置 | 说明 |
 |---|---|
-| `VB_VERSION` | 要部署的版本，例如 `0.1.2`。升级和回滚只改这里 |
+| `VB_VERSION` | 要部署的版本，例如 `0.1.3`。升级和回滚只改这里 |
 | `VB_PUBLIC_URL` | 用户访问的地址，例如 `https://voicebook.example.com`。邮件链接、分享链接和第三方登录回调都会用到，必须和实际访问地址一致 |
 | `VB_PORT` | 应用在宿主机上监听的端口，默认 `8080`。前面有 Nginx / Caddy 时建议写 `127.0.0.1:8080`，只允许本机访问 |
 | `VB_JWT_SECRET` | 登录令牌签名密钥，必填 |
@@ -93,7 +93,7 @@ docker compose ps          # app、db、redis 都显示 healthy 即启动完成
 curl http://127.0.0.1:8080/healthz
 ```
 
-`/healthz` 的返回里应能看到 `"version":"0.1.2"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
+`/healthz` 的返回里应能看到 `"version":"0.1.3"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
 
 启动失败时用 `docker compose logs app` 查看原因，见下方[常见问题](#常见问题)。
 
@@ -178,7 +178,7 @@ server {
 
 ```bash
 cd /opt/voicebook
-sed -i "s/^VB_VERSION=.*/VB_VERSION=0.1.2/" .env     # 换成目标版本
+sed -i "s/^VB_VERSION=.*/VB_VERSION=0.1.3/" .env     # 换成目标版本
 docker compose pull app
 docker compose up -d
 docker compose exec app /app/voicebook version       # 确认版本
@@ -254,7 +254,7 @@ docker run -d --name voicebook --restart unless-stopped \
   -e VB_JWT_SECRET=$(openssl rand -hex 32) \
   -e VB_SECRET_KEY=$(openssl rand -hex 32) \
   -e VB_ADMIN_PASSWORD='换成你的管理员密码' \
-  ghcr.io/hjxwz123/voicebookfactory:0.1.2
+  ghcr.io/hjxwz123/voicebookfactory:0.1.3
 ```
 
 - 数据库和文件都在 `voicebook-data` 卷里。
@@ -268,7 +268,7 @@ docker run -d --name voicebook --restart unless-stopped \
 
 ```bash
 git clone https://github.com/hjxwz123/VoiceBookFactory.git && cd VoiceBookFactory
-git checkout v0.1.2
+git checkout v0.1.3
 (cd web && npm ci && npm run build)
 (cd server && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X voicebook/internal/version.Version=$(cat ../VERSION)" -o voicebook ./cmd/voicebook)
 sudo mkdir -p /opt/voicebook/data
@@ -392,7 +392,7 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
      ```bash
      ACR=registry.cn-hangzhou.aliyuncs.com/你的命名空间
      docker login registry.cn-hangzhou.aliyuncs.com
-     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.2 ghcr.io/hjxwz123/voicebookfactory:0.1.2
+     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.3 ghcr.io/hjxwz123/voicebookfactory:0.1.3
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/postgres:17-alpine postgres:17-alpine
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/redis:7-alpine redis:7-alpine
      ```
@@ -426,10 +426,10 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
 在能访问外网的机器上导出三个镜像：
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.2
+docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.3
 docker pull --platform linux/amd64 postgres:17-alpine
 docker pull --platform linux/amd64 redis:7-alpine
-docker save ghcr.io/hjxwz123/voicebookfactory:0.1.2 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
+docker save ghcr.io/hjxwz123/voicebookfactory:0.1.3 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
 ```
 
 - 服务器是 ARM 架构时，把 `linux/amd64` 换成 `linux/arm64`。
