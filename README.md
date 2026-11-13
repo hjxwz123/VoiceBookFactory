@@ -23,7 +23,7 @@ AI 有声书工作台：导入书稿，AI 分析角色、生成画本（演播�
 镜像发布在 GitHub Container Registry，公开可拉取，支持 linux/amd64 和 linux/arm64。每个版本有自己的标签：
 
 ```
-ghcr.io/hjxwz123/voicebookfactory:0.1.1   # 指定版本（推荐，部署和回滚都按版本号）
+ghcr.io/hjxwz123/voicebookfactory:0.1.2   # 指定版本（推荐，部署和回滚都按版本号）
 ghcr.io/hjxwz123/voicebookfactory:0.1     # 0.1.x 系列的最新版
 ghcr.io/hjxwz123/voicebookfactory:latest  # 最新正式版
 ghcr.io/hjxwz123/voicebookfactory:edge    # main 分支最新构建，仅供测试
@@ -34,7 +34,7 @@ ghcr.io/hjxwz123/voicebookfactory:edge    # main 分支最新构建，仅供测�
 ### 服务器要求
 
 - Linux 64 位（x86_64 或 ARM64），Docker 24 以上并带 Compose 插件
-- 推荐 2 核 4 GB 内存起步。配音、合成和导出会占用 CPU，并发多时可以加大配置并调高 `VB_WORKERS`
+- 推荐 2 核 4 GB 内存起步。配音、合成和导出会占用 CPU，并发多时可以加大配置，并在管理后台「任务队列 → 队列设置」里调高同时运行数
 - 磁盘：系统和镜像约 2 GB；书稿、音频和导出文件按实际使用增长（一本书的成品音频通常几百 MB）。也可以在后台改为存到阿里云 OSS
 - 需要能访问你使用的 AI 平台接口（大模型、语音合成等）
 
@@ -74,14 +74,14 @@ sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
 | 配置 | 说明 |
 |---|---|
-| `VB_VERSION` | 要部署的版本，例如 `0.1.1`。升级和回滚只改这里 |
+| `VB_VERSION` | 要部署的版本，例如 `0.1.2`。升级和回滚只改这里 |
 | `VB_PUBLIC_URL` | 用户访问的地址，例如 `https://voicebook.example.com`。邮件链接、分享链接和第三方登录回调都会用到，必须和实际访问地址一致 |
 | `VB_PORT` | 应用在宿主机上监听的端口，默认 `8080`。前面有 Nginx / Caddy 时建议写 `127.0.0.1:8080`，只允许本机访问 |
 | `VB_JWT_SECRET` | 登录令牌签名密钥，必填 |
 | `VB_SECRET_KEY` | 用来加密数据库里保存的 AI 平台 API Key，必填。**设置后不要再改**，否则已保存的密钥无法解密 |
 | `POSTGRES_PASSWORD` | 数据库密码，必填。**只用字母和数字**（它会写进连接串）。数据库第一次初始化后再改这里不会生效 |
 | `VB_ADMIN_EMAIL` / `VB_ADMIN_PASSWORD` | 第一次启动时创建的管理员账号。不填密码会使用默认密码 `Admin@123456`，务必填写或在登录后立即修改 |
-| `VB_WORKERS` | 后台任务（配音、合成、导出）的并发数，默认 4 |
+| `VB_WORKERS` | 首次启动时默认任务队列的并发数，默认 4；之后在管理后台「任务队列 → 队列设置」里调整 |
 
 `.env` 里有密码和密钥，请妥善保管，不要提交到代码仓库：`chmod 600 .env`。
 
@@ -93,7 +93,7 @@ docker compose ps          # app、db、redis 都显示 healthy 即启动完成
 curl http://127.0.0.1:8080/healthz
 ```
 
-`/healthz` 的返回里应能看到 `"version":"0.1.1"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
+`/healthz` 的返回里应能看到 `"version":"0.1.2"`、`"db":"postgres"`、`"bus":"redis"`。这时就可以用 `http://服务器IP:8080` 打开试用；正式使用请继续配置域名和 HTTPS（浏览器只允许 HTTPS 页面录音）。第一次启动时后台会写入内置音色目录和素材库，期间 `"seeding"` 为 `true`，通常一分钟内变为 `false`，不影响访问。
 
 启动失败时用 `docker compose logs app` 查看原因，见下方[常见问题](#常见问题)。
 
@@ -178,7 +178,7 @@ server {
 
 ```bash
 cd /opt/voicebook
-sed -i "s/^VB_VERSION=.*/VB_VERSION=0.1.1/" .env     # 换成目标版本
+sed -i "s/^VB_VERSION=.*/VB_VERSION=0.1.2/" .env     # 换成目标版本
 docker compose pull app
 docker compose up -d
 docker compose exec app /app/voicebook version       # 确认版本
@@ -254,7 +254,7 @@ docker run -d --name voicebook --restart unless-stopped \
   -e VB_JWT_SECRET=$(openssl rand -hex 32) \
   -e VB_SECRET_KEY=$(openssl rand -hex 32) \
   -e VB_ADMIN_PASSWORD='换成你的管理员密码' \
-  ghcr.io/hjxwz123/voicebookfactory:0.1.1
+  ghcr.io/hjxwz123/voicebookfactory:0.1.2
 ```
 
 - 数据库和文件都在 `voicebook-data` 卷里。
@@ -268,7 +268,7 @@ docker run -d --name voicebook --restart unless-stopped \
 
 ```bash
 git clone https://github.com/hjxwz123/VoiceBookFactory.git && cd VoiceBookFactory
-git checkout v0.1.1
+git checkout v0.1.2
 (cd web && npm ci && npm run build)
 (cd server && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X voicebook/internal/version.Version=$(cat ../VERSION)" -o voicebook ./cmd/voicebook)
 sudo mkdir -p /opt/voicebook/data
@@ -392,7 +392,7 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
      ```bash
      ACR=registry.cn-hangzhou.aliyuncs.com/你的命名空间
      docker login registry.cn-hangzhou.aliyuncs.com
-     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.1 ghcr.io/hjxwz123/voicebookfactory:0.1.1
+     docker buildx imagetools create -t $ACR/voicebookfactory:0.1.2 ghcr.io/hjxwz123/voicebookfactory:0.1.2
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/postgres:17-alpine postgres:17-alpine
      docker buildx imagetools create --platform linux/amd64 --platform linux/arm64 -t $ACR/redis:7-alpine redis:7-alpine
      ```
@@ -426,10 +426,10 @@ ssh root@服务器IP "cd /opt/voicebook && mv .env.example .env"
 在能访问外网的机器上导出三个镜像：
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.1
+docker pull --platform linux/amd64 ghcr.io/hjxwz123/voicebookfactory:0.1.2
 docker pull --platform linux/amd64 postgres:17-alpine
 docker pull --platform linux/amd64 redis:7-alpine
-docker save ghcr.io/hjxwz123/voicebookfactory:0.1.1 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
+docker save ghcr.io/hjxwz123/voicebookfactory:0.1.2 postgres:17-alpine redis:7-alpine | gzip > voicebook-images.tar.gz
 ```
 
 - 服务器是 ARM 架构时，把 `linux/amd64` 换成 `linux/arm64`。
@@ -497,7 +497,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 | `VB_REDIS_URL` | 无 | `redis://[:密码@]host:6379/0`；单实例可以不填 |
 | `VB_DATA_DIR` | `./data`（镜像内 `/data`） | 本地文件目录 |
 | `VB_WEB_DIR` | `../web/dist`（镜像内 `/app/web`） | 前端文件目录 |
-| `VB_WORKERS` | `4` | 后台任务并发数 |
+| `VB_WORKERS` | `4` | 首次启动时默认任务队列的并发数（之后在管理后台调整） |
 | `VB_ADMIN_EMAIL` / `VB_ADMIN_PASSWORD` | `admin@example.com` / `Admin@123456` | 第一次启动时创建的管理员 |
 | `VB_LLM_PROTOCOL` / `VB_LLM_BASE_URL` / `VB_LLM_API_KEY` / `VB_LLM_MODEL` | 无 | 可选：第一次启动时自动创建的大模型账号 |
 | `VB_BOT_CONTACT` | 无 | 下载 Wikimedia / OpenGameArt 曲库时附带的联系方式 |
