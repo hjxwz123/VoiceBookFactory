@@ -32,8 +32,9 @@ func (a *App) CreateAPIKey(x *Access, name string, scopes, ips []string, rpm int
 	if err := a.RequireFeature(x.StudioID, model.FeatOpenAPI, "开放平台"); err != nil {
 		return nil, "", err
 	}
+	scopes = NormalizeScopes(scopes)
 	if len(scopes) == 0 {
-		scopes = []string{"read", "produce", "tts"}
+		scopes = []string{ScopeRead, ScopeProduce, ScopeTTS}
 	}
 	if rpm <= 0 {
 		rpm = 60
@@ -41,6 +42,43 @@ func (a *App) CreateAPIKey(x *Access, name string, scopes, ips []string, rpm int
 	raw := "vb_" + secure.Token(30)
 	k := &model.APIKey{StudioID: x.StudioID, Name: firstNonEmpty(name, "默认 Key"), Prefix: raw[:10], KeyHash: secure.SHA256(raw), Scopes: model.Strings(scopes...), IPAllowlist: model.Strings(ips...), RateLimit: rpm, CreatedBy: x.User.ID}
 	return k, raw, a.DB.Create(k).Error
+}
+
+// API key scopes (see the Open API guide).
+const (
+	ScopeRead    = "read"    // look up voices, books, runs and download finished audio
+	ScopeProduce = "produce" // import manuscripts and start one-click production (uses credits)
+	ScopeTTS     = "tts"     // voice single passages (uses credits)
+)
+
+// legacyScopes are the names the key dialog offered before 0.1.4: what each was meant to allow.
+var legacyScopes = map[string][]string{"write": {ScopeProduce}, "generate": {ScopeProduce, ScopeTTS}}
+
+// NormalizeScopes keeps the known scopes, in a fixed order, translating the older names.
+func NormalizeScopes(in []string) []string {
+	want := map[string]bool{}
+	for _, s := range in {
+		s = strings.TrimSpace(strings.ToLower(s))
+		if alias, ok := legacyScopes[s]; ok {
+			for _, x := range alias {
+				want[x] = true
+			}
+			continue
+		}
+		want[s] = true
+	}
+	var out []string
+	for _, s := range []string{ScopeRead, ScopeProduce, ScopeTTS} {
+		if want[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// HasScope reports whether a key may use an endpoint that needs scope (older scope names count).
+func HasScope(k *model.APIKey, scope string) bool {
+	return contains(NormalizeScopes(k.Scopes.V), scope)
 }
 
 // AuthAPIKey validates an API key and returns studio-owner level access.

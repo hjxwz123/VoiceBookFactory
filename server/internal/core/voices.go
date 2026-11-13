@@ -704,6 +704,7 @@ func (a *App) jobVoiceClone(ctx context.Context, jc *jobs.Context) error {
 		}
 	}
 	a.Notify(v.CreatedBy, v.StudioID, "voice_ready", "声音克隆完成", "「"+v.Name+"」已可以使用。"+res.Message, "/voices")
+	a.FireWebhook(v.StudioID, "voice.ready", map[string]any{"voiceId": v.ID, "name": v.Name})
 	jc.Progress(1, "音色已可用")
 	return nil
 }

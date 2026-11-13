@@ -161,6 +161,16 @@ html:not(.vt-theme)::view-transition-new(root) { animation: vt-enter 0.56s cubic
 .prose-help ul { list-style: disc; padding-left: 20px; }
 .prose-help ol { list-style: decimal; padding-left: 20px; }
 .prose-help strong { color: var(--ink); }
+.prose-help h3 { font-size: 14.5px; font-weight: 650; margin: 18px 0 6px; color: var(--ink); }
+.prose-help a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-help code { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.88em; background: var(--sunken); border-radius: 5px; padding: 1px 5px; color: var(--ink); }
+.prose-help pre { background: var(--sunken); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
+.prose-help pre code { background: none; padding: 0; font-size: inherit; }
+.prose-help table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; display: block; overflow-x: auto; }
+.prose-help th, .prose-help td { border-bottom: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+.prose-help th { color: var(--ink); font-weight: 600; background: var(--sunken); white-space: nowrap; }
+.prose-help td { color: var(--muted); }
+.prose-help blockquote { border-left: 3px solid var(--line-strong); padding-left: 12px; margin: 10px 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }

@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: 声书工坊开放接口
+  version: "1"
+  description: |
+    用程序批量导入书稿、发起一键成书、查询进度、下载成品，或者把单段文字配成语音。
+
+    - 认证：请求头 `Authorization: Bearer <密钥>` 或 `X-API-Key: <密钥>`。密钥在「工作室设置 → 开发者」创建，只显示一次。
+    - 权限：`read` 查询与下载；`produce` 导入书稿与一键成书（消耗积分）；`tts` 单段配音（消耗积分）。
+    - 限流：每个密钥每分钟的请求数上限在创建时设置，超出返回 429。
+    - 出错时返回 `{"error": {"code": "...", "message": "..."}}`，`message` 可以直接展示给用户。
+    - 完整说明见帮助中心「开放接口文档」（{{PUBLIC_URL}}/openapi/v1/docs）。
+servers:
+  - url: "{{PUBLIC_URL}}/openapi/v1"
+security:
+  - bearer: []
+  - apiKey: []
+tags:
+  - name: 音色
+  - name: 图书与一键成书
+  - name: 单段配音
+paths:
+  /voices:
+    get:
+      tags: [音色]
+      summary: 列出可用的音色
+      description: 工作室在选角时能用的全部音色。需要 `read` 权限。
+      operationId: listVoices
+      responses:
+        "200":
+          description: 音色列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items: { $ref: "#/components/schemas/Voice" }
+        default: { $ref: "#/components/responses/Error" }
+  /books:
+    post:
+      tags: [图书与一键成书]
+      summary: 导入书稿，创建图书
+      description: |
+        把整本书稿的纯文本交上来，系统自动识别章节并创建图书。`autoProduce` 为 true 时立即开始一键成书，返回里会带 `pipelineId`。
+        需要 `produce` 权限。
+      operationId: createBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateBook" }
+            example:
+              title: 雨夜
+              author: 某某
+              text: "第一章 初见\n林黛玉坐在窗前……\n第二章 重逢\n……"
+              mode: multi
+              autoProduce: true
+              config: { tier: standard, bgm: true, chapterIds: [] }
+      responses:
+        "200":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookId, chapters, detection]
+                properties:
+                  bookId: { type: string }
+                  chapters: { type: integer, description: 识别出的章节数 }
+                  detection:
+                    type: string
+                    enum: [structure, rules, ai, size, single]
+                    description: 章节识别方式：文档目录、标题规则、AI、按字数切分、整篇一章
+                  pipelineId: { type: string, description: autoProduce 为 true 时返回 }
+        default: { $ref: "#/components/responses/Error" }
+  /books/{id}:
+    get:
+      tags: [图书与一键成书]
+      summary: 查看图书与各章进度
+      description: 需要 `read` 权限。
+      operationId: getBook
+      parameters: [{ $ref: "#/components/parameters/BookID" }]
+      responses:
+        "200":
+          description: 图书
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Book" }
+        default: { $ref: "#/components/responses/Error" }
+  /books/{id}/produce:
+    post:
+      tags: [图书与一键成书]
+      summary: 开始一键成书
+      description: |
+        对已有图书开始一键成书。可以只做部分章节（`chapterIds`）。同一本书同时只能有一个进行中的任务，否则返回 409。
+        积分按章冻结：开始时只需够角色分析和第一章；中途积分用完时任务进入 `waiting`（`waitReason` 为 `credits`），充值后在网页上点「继续」。
+        需要 `produce` 权限。
+      operationId: produceBook
+      parameters: [{ $ref: "#/components/parameters/BookID" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PipelineConfig" }
+      responses:
+        "200":
+          description: 已开始
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pipelineId: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+  /pipelines/{id}:
+    get:
+      tags: [图书与一键成书]
+      summary: 查询一键成书进度
+      description: 任何权限的密钥都可以查询本工作室的任务。建议每 10–30 秒查询一次，或者用 Webhook 接收完成通知。
+      operationId: getPipeline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 任务进度
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pipeline" }
+        default: { $ref: "#/components/responses/Error" }
+  /books/{id}/outputs:
+    get:
+      tags: [图书与一键成书]
+      summary: 获取已合成章节的下载地址
+      description: 返回每个已合成章节的成品音频地址和逐句时间（可做字幕）。地址 24 小时内有效，过期后重新获取。需要 `read` 权限。
+      operationId: getOutputs
+      parameters: [{ $ref: "#/components/parameters/BookID" }]
+      responses:
+        "200":
+          description: 成品列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Output" }
+                  expiresIn: { type: integer, description: 地址有效期（秒） }
+        default: { $ref: "#/components/responses/Error" }
+  /tts:
+    post:
+      tags: [单段配音]
+      summary: 把一段文字配成语音
+      description: 同步返回音频地址（24 小时内有效）。按字数扣积分。需要 `tts` 权限。
+      operationId: tts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, voiceId]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 2000 }
+                voiceId: { type: string, description: 来自 GET /voices }
+                emotion:
+                  type: string
+                  enum: [neutral, happy, sad, angry, fearful, surprised, disgusted, gentle, nervous, tired, whisper, shout]
+                  description: 情绪，音色不支持时忽略
+                speed: { type: number, minimum: 0.5, maximum: 2, description: 语速，默认用音色的默认值 }
+            example: { text: 你好，欢迎收听。, voiceId: "01a1…", emotion: gentle }
+      responses:
+        "200":
+          description: 配音结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, format: uri }
+                  durationMs: { type: integer }
+                  credits: { type: integer, description: 本次消耗的积分 }
+        default: { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+    apiKey: { type: apiKey, in: header, name: X-API-Key }
+  parameters:
+    BookID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Error:
+      description: 出错。`code` 用于程序判断，`message` 可直接展示。
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, unauthorized, forbidden, not_found, conflict, insufficient_credits, plan_required, rate_limited, internal]
+            message: { type: string }
+            data: { type: object, additionalProperties: true }
+    Voice:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        gender: { type: string, enum: [male, female, unknown] }
+        ageGroup: { type: string, enum: [child, teen, young, adult, middle, senior] }
+        tags: { type: array, items: { type: string } }
+        language: { type: string, example: zh-CN }
+        priceTier: { type: string, enum: [economy, standard, premium] }
+        sampleUrl: { type: string, format: uri }
+    PipelineConfig:
+      type: object
+      description: 一键成书的设置，全部可选。
+      properties:
+        mode: { type: string, enum: [single, multi, drama], description: 单播、多播有声书、广播剧；默认沿用图书的设置 }
+        tier: { type: string, enum: [economy, standard, premium], default: standard, description: 选角时用的音色价位 }
+        narratorVoiceId: { type: string, description: 指定旁白音色；不填由 AI 挑选 }
+        bgm: { type: boolean, description: 自动配背景音乐 }
+        bgmAssetId: { type: string, description: 指定背景音乐（素材 ID） }
+        introTemplateId: { type: string }
+        outroTemplateId: { type: string }
+        preset: { type: string, description: 成品响度标准，如 generic }
+        pauseAfterCast: { type: boolean, description: 选角后暂停，等人在网页上确认 }
+        chapterIds: { type: array, items: { type: string }, description: 只做这些章节；不填做全部纳入制作的章节 }
+        removeSpeechTags: { type: boolean, description: 去掉「他说道」之类的提示语；不填时广播剧去掉、其余保留 }
+    CreateBook:
+      type: object
+      required: [text]
+      properties:
+        title: { type: string }
+        author: { type: string }
+        description: { type: string }
+        text: { type: string, description: 整本书稿的纯文本，章节标题单独成行 }
+        mode: { type: string, enum: [single, multi, drama], default: multi }
+        language: { type: string, default: zh-CN }
+        autoProduce: { type: boolean, description: 创建后立即开始一键成书 }
+        config: { $ref: "#/components/schemas/PipelineConfig" }
+        priority: { type: integer, minimum: 0, maximum: 10, description: 排队优先级，套餐包含批量制作时生效 }
+    Chapter:
+      type: object
+      properties:
+        id: { type: string }
+        index: { type: integer }
+        title: { type: string }
+        wordCount: { type: integer }
+        durationMs: { type: integer }
+        stage: { type: string, enum: [script, voice, render, review, done], description: 待生成画本、配音中、待合成、待审听、已完成 }
+        rendered: { type: boolean, description: 有最新的成品 }
+    Book:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        status: { type: string, enum: [preparing, producing, completed, published, archived, moderation], description: 准备中、制作中、已完成、已发布、已归档、审核中 }
+        wordCount: { type: integer }
+        pipelineId: { type: string, description: 最近一次一键成书 }
+        chapters:
+          type: array
+          items: { $ref: "#/components/schemas/Chapter" }
+    Pipeline:
+      type: object
+      properties:
+        id: { type: string }
+        bookId: { type: string }
+        status: { type: string, enum: [queued, running, paused, waiting, completed, failed, canceled] }
+        waitReason: { type: string, enum: ["", cast, credits], description: waiting 时等什么：确认选角，或充值 }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        progressText: { type: string }
+        error: { type: string }
+        estCredits: { type: integer }
+        usedCredits: { type: integer }
+        elapsedMs: { type: integer }
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string, enum: [characters, casting, script, tts, post, render] }
+              name: { type: string }
+              status: { type: string, enum: [pending, running, paused, done, failed] }
+              progress: { type: number }
+              done: { type: integer, description: 已完成的章数（逐章的阶段） }
+              total: { type: integer }
+        chapters:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              index: { type: integer }
+              title: { type: string }
+              status: { type: string, enum: [pending, running, done, failed] }
+              step: { type: string, enum: ["", script, tts, post, render] }
+              error: { type: string }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    Output:
+      type: object
+      properties:
+        chapterId: { type: string }
+        index: { type: integer }
+        title: { type: string }
+        durationMs: { type: integer }
+        format: { type: string, example: mp3 }
+        stale: { type: boolean, description: 章节在合成后又改过，成品不是最新的 }
+        url: { type: string, format: uri }
+        timings:
+          type: array
+          items:
+            type: object
+            properties:
+              segmentId: { type: string }
+              characterId: { type: string }
+              startMs: { type: integer }
+              endMs: { type: integer }
+              text: { type: string }

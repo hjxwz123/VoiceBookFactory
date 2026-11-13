@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"voicebook/internal/config"
 	"voicebook/internal/core"
 )
 
@@ -64,5 +65,23 @@ func TestUsersSeePlainErrorsAdminsSeeDetail(t *testing.T) {
 	body = call("/api/admin/v1/jobs", data)
 	if body["items"].([]any)[0].(map[string]any)["error"] != raw {
 		t.Fatalf("admin saw %v", body)
+	}
+}
+
+func TestOpenAPISpecNamesThisSite(t *testing.T) {
+	if !strings.Contains(openAPIYAML, "{{PUBLIC_URL}}/openapi/v1") {
+		t.Fatal("placeholder missing from the description")
+	}
+	s := &Server{app: &core.App{Cfg: &config.Config{PublicURL: "https://vb.example.com/"}}}
+	w := httptest.NewRecorder()
+	s.openAPISpec(w, httptest.NewRequest("GET", "/openapi/v1/openapi.yaml", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, "url: \"https://vb.example.com/openapi/v1\"") || strings.Contains(body, "{{PUBLIC_URL}}") {
+		t.Fatalf("served:\n%.300s", body)
+	}
+	for _, p := range []string{"/voices:", "/books:", "/books/{id}/produce:", "/pipelines/{id}:", "/books/{id}/outputs:", "/tts:"} {
+		if !strings.Contains(body, p) {
+			t.Errorf("%s not documented", p)
+		}
 	}
 }

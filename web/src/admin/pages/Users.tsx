@@ -1,5 +1,6 @@
 import { Search } from '@/components/icons'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { adminApi } from '@/lib/api'
 import { dateTime, fromNow, num, roleName } from '@/lib/format'
@@ -54,6 +55,7 @@ function UserDetail({ id, onClose }: { id: string | null; onClose: () => void })
   const { data, refetch } = useAdmin<any>(`/users/${id}`, {}, { enabled: !!id })
   const [roles, setRoles] = useState<string[] | null>(null)
   const [pw, setPw] = useState('')
+  const nav = useNavigate()
   const u = data?.user
   const act = async (body: any, msg: string) => {
     await adminApi.patch(`/users/${id}`, body)
@@ -73,6 +75,7 @@ function UserDetail({ id, onClose }: { id: string | null; onClose: () => void })
             )}
             <Button size="sm" onClick={async () => { if (await confirm({ title: '重置密码？', description: '会生成一个临时密码，用户需要用它登录后修改。' })) { const r = await adminApi.post(`/users/${id}/reset-password`); setPw(r.password) } }}>重置密码</Button>
             <Button size="sm" onClick={async () => { await adminApi.post(`/users/${id}/logout`); toast.success('已强制下线所有设备'); refetch() }}>强制下线</Button>
+            <Button size="sm" onClick={() => nav(`/messages?to=${encodeURIComponent(u.email || u.phone || u.id)}`)}>发站内信</Button>
           </div>
           {pw && <div className="space-y-1"><p className="text-xs text-muted">临时密码（只显示一次）</p><Copyable text={pw} /></div>}
           {u.realNameStatus === 'pending' && (

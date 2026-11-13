@@ -1281,24 +1281,64 @@ func (s *Server) adminRoutes(r chi.Router) {
 		var in struct {
 			Title, Body, Link string
 			PlanCodes         []string `json:"planCodes"`
-			UserIDs           []string `json:"userIds"`
+			UserIDs           []string `json:"userIds"`    // earlier clients
+			Recipients        []string `json:"recipients"` // email addresses, phone numbers or user IDs
+			Email             bool     `json:"email"`      // also send it as an email
+			DryRun            bool     `json:"dryRun"`     // only say who would get it
 		}
 		bind(r, &in)
-		if strings.TrimSpace(in.Title) == "" {
-			return nil, core.Bad("请填写标题")
-		}
 		var ids []string
+		var found []core.Recipient
+		var unknown []string
+		target := "all"
 		switch {
-		case len(in.UserIDs) > 0:
-			ids = in.UserIDs
+		case len(in.Recipients) > 0 || len(in.UserIDs) > 0:
+			target = "users"
+			found, unknown = s.app.ResolveRecipients(append(in.Recipients, in.UserIDs...))
+			for _, u := range found {
+				ids = append(ids, u.ID)
+			}
 		case len(in.PlanCodes) > 0:
+			target = "plans"
 			s.app.DB.Model(&model.StudioMember{}).Where("studio_id IN (?)", s.app.DB.Model(&model.Studio{}).Select("id").Where("plan_id IN (?)", s.app.DB.Model(&model.Plan{}).Select("id").Where("code IN ?", in.PlanCodes))).Distinct().Pluck("user_id", &ids)
 		default:
 			s.app.DB.Model(&model.User{}).Where("status = ?", model.UserActive).Pluck("id", &ids)
 		}
-		go s.app.NotifyMany(ids, "", "broadcast", in.Title, in.Body, in.Link)
-		s.app.Audit(userOf(r).ID, "message.broadcast", "message", "", in.Title, clientIP(r), map[string]any{"recipients": len(ids)})
-		return map[string]any{"recipients": len(ids)}, nil
+		// how many of them have an email address (counted without a huge IN list for broadcasts)
+		var withEmail int64
+		hasEmail := s.app.DB.Model(&model.User{}).Where("email IS NOT NULL AND email <> ''")
+		switch target {
+		case "users":
+			if len(ids) > 0 {
+				hasEmail.Where("id IN ?", ids).Count(&withEmail)
+			}
+		case "plans":
+			hasEmail.Where("id IN (?)", s.app.DB.Model(&model.StudioMember{}).Select("user_id").Where("studio_id IN (?)", s.app.DB.Model(&model.Studio{}).Select("id").Where("plan_id IN (?)", s.app.DB.Model(&model.Plan{}).Select("id").Where("code IN ?", in.PlanCodes)))).Count(&withEmail)
+		default:
+			hasEmail.Where("status = ?", model.UserActive).Count(&withEmail)
+		}
+		view := map[string]any{"target": target, "recipients": len(ids), "found": found, "unknown": unknown, "withEmail": withEmail, "smtp": s.app.SMTPConfigured()}
+		if found == nil {
+			view["found"] = []core.Recipient{}
+		}
+		if unknown == nil {
+			view["unknown"] = []string{}
+		}
+		if in.DryRun {
+			return view, nil
+		}
+		if strings.TrimSpace(in.Title) == "" {
+			return nil, core.Bad("请填写标题")
+		}
+		if len(unknown) > 0 {
+			return nil, core.Bad("找不到这些用户：%s。请改正或删掉后再发送", strings.Join(unknown, "、"))
+		}
+		if len(ids) == 0 {
+			return nil, core.Bad("没有找到要发送的用户")
+		}
+		go s.app.SendMessage(ids, in.Title, in.Body, in.Link, in.Email)
+		s.app.Audit(userOf(r).ID, "message.broadcast", "message", "", in.Title, clientIP(r), map[string]any{"recipients": len(ids), "target": target, "email": in.Email})
+		return view, nil
 	}))
 
 	// ---------------- system ----------------

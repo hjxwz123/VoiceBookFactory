@@ -1,12 +1,50 @@
 package core
 
-import "voicebook/internal/model"
+import (
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
+
+	"voicebook/internal/model"
+)
+
+//go:embed docs/open-api.md
+var openAPIGuide string
+
+// OpenAPIDocSlug identifies the Open API guide among the help articles (/openapi/v1/docs opens it).
+const OpenAPIDocSlug = "open-api"
+
+// managedDocs are help articles kept in step with the built-in text by a content hash stored in
+// Version: while an article still matches the hash it was written with, a newer built-in text
+// replaces it; once an administrator edits it, it is left alone.
+var managedDocs = []helpDoc{
+	{Category: "开放平台", Title: "开放接口（Open API）文档", Summary: "用程序导入书稿、发起一键成书、下载成品，以及 Webhook 通知", Body: openAPIGuide, Slug: OpenAPIDocSlug},
+}
+
+func docHash(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])[:32]
+}
+
+func (a *App) syncManagedDocs() {
+	for i, d := range managedDocs {
+		var cur model.Article
+		if a.DB.Where("kind = ? AND slug = ?", "help", d.Slug).Limit(1).Find(&cur).Error != nil || cur.ID == "" {
+			a.DB.Create(&model.Article{Kind: "help", Slug: d.Slug, Category: d.Category, Title: d.Title, Summary: d.Summary, Body: d.Body, Version: docHash(d.Body), SortOrder: 100 + i, Published: true})
+			continue
+		}
+		if cur.Version == docHash(cur.Body) && cur.Body != d.Body {
+			a.DB.Model(&cur).Updates(map[string]any{"title": d.Title, "summary": d.Summary, "body": d.Body, "category": d.Category, "version": docHash(d.Body)})
+		}
+	}
+}
 
 // helpDoc is one built-in help-center article. Replaces lists earlier built-in titles it supersedes:
 // such an article is rewritten in place, but only while its body is still the untouched built-in
 // text (an administrator's edits are never overwritten).
 type helpDoc struct {
 	Category, Title, Summary, Body string
+	Slug                           string // managed docs only
 	Featured                       bool
 	Replaces                       []string
 }
@@ -125,6 +163,7 @@ var helpSuperseded = map[string][]string{
 
 // syncHelpDocs adds new built-in help articles and refreshes superseded ones that nobody edited.
 func (a *App) syncHelpDocs() {
+	defer a.syncManagedDocs()
 	builtin := map[string]string{} // title -> untouched built-in body from earlier releases
 	for _, h := range helpV1 {
 		builtin[h.Title] = h.Body

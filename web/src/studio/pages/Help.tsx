@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BookOpen, ChevronLeft, LifeBuoy, MessageCircle, Search, Sparkles } from '@/components/icons'
 import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Link, Route, Routes, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -71,7 +72,7 @@ function HelpHome() {
             <article key={a.id} className="border-l-2 border-line pl-5">
               <div className="flex items-center gap-2 text-xs text-faint">{a.version && <Badge tone="accent">{a.version}</Badge>}{date(a.createdAt)}</div>
               <h3 className="mt-1 text-[15px] font-semibold">{a.title}</h3>
-              <div className="prose-help mt-2 text-[13.5px]"><ReactMarkdown>{a.body}</ReactMarkdown></div>
+              <div className="prose-help mt-2 text-[13.5px]"><ReactMarkdown remarkPlugins={[remarkGfm]}>{a.body}</ReactMarkdown></div>
             </article>
           ))}
           {!data?.length && <Empty icon={<Sparkles />} title="暂无更新日志" />}
@@ -93,7 +94,7 @@ function Article() {
         <article>
           <p className="text-xs text-faint">{data.category}</p>
           <h1 className="mt-1 font-serif text-[28px] font-semibold leading-tight tracking-[0.01em]">{data.title}</h1>
-          <div className="prose-help mt-6 text-[14.5px] leading-[1.85]"><ReactMarkdown>{data.body}</ReactMarkdown></div>
+          <div className="prose-help mt-6 text-[14.5px] leading-[1.85]"><ReactMarkdown remarkPlugins={[remarkGfm]}>{data.body}</ReactMarkdown></div>
           <div className="mt-10 rounded-panel border border-line bg-surface px-5 py-4 text-[13px] text-muted">没有解决你的问题？在右上角「意见反馈」告诉我们，通常一个工作日内回复。</div>
           <div className="mt-4 text-[12.5px] text-muted">协议与政策：<LegalLinks all /></div>
         </article>

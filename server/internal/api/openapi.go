@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	_ "embed"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +15,26 @@ import (
 	"voicebook/internal/core"
 	"voicebook/internal/model"
 )
+
+//go:embed openapi.yaml
+var openAPIYAML string
+
+// openAPISpec serves the OpenAPI 3.1 description with this site's address filled in.
+func (s *Server) openAPISpec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="voicebook-openapi.yaml"`)
+	w.Write([]byte(strings.ReplaceAll(openAPIYAML, "{{PUBLIC_URL}}", strings.TrimRight(s.app.Cfg.PublicURL, "/"))))
+}
+
+// openAPIDocs opens the guide in the help center.
+func (s *Server) openAPIDocs(w http.ResponseWriter, r *http.Request) {
+	var a model.Article
+	if s.app.DB.Select("id").Where("kind = ? AND slug = ? AND published = ?", "help", core.OpenAPIDocSlug, true).Limit(1).Find(&a).Error == nil && a.ID != "" {
+		http.Redirect(w, r, "/help/"+a.ID, http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/help", http.StatusFound)
+}
 
 func ttsReq(v *model.Voice, text string) tts.SynthesizeRequest {
 	return tts.SynthesizeRequest{Text: text, ProviderVoiceID: v.ProviderVoiceID, Model: v.Model, Speed: firstNonZeroF(v.Defaults.V.Speed, 1), VoiceGender: v.Gender, VoiceAge: v.AgeGroup, VoiceSeed: v.ID}
@@ -43,10 +65,10 @@ func apiAccess(r *http.Request) (*model.APIKey, *core.Access) {
 }
 
 func needScope(k *model.APIKey, scope string) error {
-	if containsStr(k.Scopes.V, scope) {
+	if core.HasScope(k, scope) {
 		return nil
 	}
-	return core.Forbidden("该 API Key 没有 " + scope + " 权限")
+	return core.Forbidden("该 API Key 没有 " + scope + " 权限，请在「工作室设置 → 开发者」里新建一个带这项权限的密钥")
 }
 
 func (s *Server) openBook(r *http.Request) (*core.Access, error) {
@@ -216,7 +238,7 @@ func (s *Server) openRoutes(r chi.Router) {
 		}
 		out, err := p.Synthesize(r.Context(), req)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("配音失败%s账号「%s」：%w", core.DetailSep, acc.Name, err)
 		}
 		credits, err := s.app.ChargeCredits(core.Charge{StudioID: x.StudioID, UserID: x.User.ID, Feature: core.FeatQuick, Tier: v.PriceTier, Quantity: float64(utf8.RuneCountInString(in.Text)), Unit: "chars", Provider: acc.Provider, AccountID: acc.ID, Note: "Open API"})
 		if err != nil {

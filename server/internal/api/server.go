@@ -104,8 +104,13 @@ func (s *Server) Router() http.Handler {
 		})
 	})
 	r.Route("/openapi/v1", func(r chi.Router) {
-		r.Use(s.apiKeyAuth)
-		s.openRoutes(r)
+		// the description and the guide are public; everything else needs a key
+		r.Get("/openapi.yaml", s.openAPISpec)
+		r.Get("/docs", s.openAPIDocs)
+		r.Group(func(r chi.Router) {
+			r.Use(s.apiKeyAuth)
+			s.openRoutes(r)
+		})
 	})
 	s.mountWeb(r)
 	return r

@@ -515,6 +515,19 @@ function Channels() {
   )
 }
 
+// API key scopes, as the open API checks them
+const SCOPES: [string, string, string][] = [
+  ['read', '查询与下载', '查音色、查图书和任务进度、获取成品下载地址'],
+  ['produce', '导入书稿与一键成书', '会消耗工作室积分'],
+  ['tts', '单段配音', '会消耗工作室积分'],
+]
+// keys made before 0.1.4 may carry the older names "write" and "generate"
+const LEGACY_SCOPES: Record<string, string[]> = { write: ['produce'], generate: ['produce', 'tts'] }
+function scopeLabels(scopes: string[] = []) {
+  const set = new Set(scopes.flatMap((s) => LEGACY_SCOPES[s] ?? [s]))
+  return SCOPES.filter(([k]) => set.has(k)).map(([, l]) => l).join('、') || '—'
+}
+
 function Developer() {
   const sid = useSession((s) => s.studioId)
   const keys = useQuery<any[]>({ queryKey: ['api-keys', sid], queryFn: () => api.get(`/studios/${sid}/api-keys`) })
@@ -524,11 +537,11 @@ function Developer() {
   const [hook, setHook] = useState<any>(null)
   return (
     <div className="space-y-6">
-      <Panel title="API 密钥" description={<>用于通过开放接口批量导入书稿、发起一键成书和下载成品。接口文档：<a href="/openapi/v1/docs" target="_blank" className="text-accent">/openapi/v1</a></>} padded={false} actions={<Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={() => { setSecret(''); setNewKey({ name: '', scopes: ['read', 'write'], rateLimit: 60, ips: '' }) }}>创建密钥</Button>}>
+      <Panel title="API 密钥" description={<>用程序批量导入书稿、发起一键成书和下载成品。<a href="/openapi/v1/docs" target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">接口文档</a> · <a href="/openapi/v1/openapi.yaml" target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">OpenAPI 描述文件</a>（可导入 Postman、Apifox）</>} padded={false} actions={<Button size="sm" variant="primary" icon={<Plus className="size-4" />} onClick={() => { setSecret(''); setNewKey({ name: '', scopes: ['read', 'produce'], rateLimit: 60, ips: '' }) }}>创建密钥</Button>}>
         {!(keys.data ?? []).length ? <Empty title="还没有 API 密钥" className="py-10" /> : (
           <Table>
             <thead><tr><th>名称</th><th>前缀</th><th>权限</th><th className="!text-right">调用</th><th>最近使用</th><th /></tr></thead>
-            <tbody>{keys.data!.map((k) => <tr key={k.id} className={cn(k.disabled && 'opacity-50')}><td className="font-medium">{k.name}</td><td className="font-mono text-xs">{k.prefix}…</td><td>{k.scopes.join('、')}</td><td className="text-right tnum">{num(k.calls)}</td><td className="text-xs text-faint">{fromNow(k.lastUsedAt)}</td><td className="whitespace-nowrap text-right"><Switch checked={!k.disabled} onChange={async (v) => { await api.patch(`/studios/${sid}/api-keys/${k.id}`, { disabled: !v }); invalidate(['api-keys']) }} /><IconButton label="删除" size="xs" className="ml-2" icon={<Trash2 className="size-3.5" />} onClick={async () => { if (await confirm({ title: '删除这个密钥？', description: '使用它的程序会立即无法访问。', danger: true, confirmText: '删除' })) { await api.del(`/studios/${sid}/api-keys/${k.id}`); invalidate(['api-keys']) } }} /></td></tr>)}</tbody>
+            <tbody>{keys.data!.map((k) => <tr key={k.id} className={cn(k.disabled && 'opacity-50')}><td className="font-medium">{k.name}</td><td className="font-mono text-xs">{k.prefix}…</td><td>{scopeLabels(k.scopes)}</td><td className="text-right tnum">{num(k.calls)}</td><td className="text-xs text-faint">{fromNow(k.lastUsedAt)}</td><td className="whitespace-nowrap text-right"><Switch checked={!k.disabled} onChange={async (v) => { await api.patch(`/studios/${sid}/api-keys/${k.id}`, { disabled: !v }); invalidate(['api-keys']) }} /><IconButton label="删除" size="xs" className="ml-2" icon={<Trash2 className="size-3.5" />} onClick={async () => { if (await confirm({ title: '删除这个密钥？', description: '使用它的程序会立即无法访问。', danger: true, confirmText: '删除' })) { await api.del(`/studios/${sid}/api-keys/${k.id}`); invalidate(['api-keys']) } }} /></td></tr>)}</tbody>
           </Table>
         )}
       </Panel>
@@ -553,7 +566,16 @@ function Developer() {
         ) : newKey && (
           <div className="space-y-4">
             <Field label="名称"><Input value={newKey.name} onChange={(e) => setNewKey({ ...newKey, name: e.target.value })} placeholder="例如：内容管理系统" /></Field>
-            <Field label="权限"><div className="flex gap-4">{[['read', '读取'], ['write', '写入'], ['generate', '发起生成（消耗积分）']].map(([k, l]) => <Checkbox key={k} checked={newKey.scopes.includes(k)} onChange={(v) => setNewKey({ ...newKey, scopes: v ? [...newKey.scopes, k] : newKey.scopes.filter((x: string) => x !== k) })} label={l} />)}</div></Field>
+            <Field label="权限">
+              <div className="space-y-2">
+                {SCOPES.map(([k, l, hint]) => (
+                  <div key={k}>
+                    <Checkbox checked={newKey.scopes.includes(k)} onChange={(v) => setNewKey({ ...newKey, scopes: v ? [...newKey.scopes, k] : newKey.scopes.filter((x: string) => x !== k) })} label={<>{l} <span className="font-mono text-xs text-faint">{k}</span></>} />
+                    <p className="pl-6 text-xs text-muted">{hint}</p>
+                  </div>
+                ))}
+              </div>
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="每分钟请求上限"><Input type="number" value={newKey.rateLimit} onChange={(e) => setNewKey({ ...newKey, rateLimit: Number(e.target.value) })} /></Field>
               <Field label="IP 白名单（可选）"><Input value={newKey.ips} onChange={(e) => setNewKey({ ...newKey, ips: e.target.value })} placeholder="逗号分隔" /></Field>

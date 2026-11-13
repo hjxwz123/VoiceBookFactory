@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { adminApi } from '@/lib/api'
 import { fromNow } from '@/lib/format'
-import { Badge, Button, Checkbox, Dialog, Empty, Field, Input, PageHeader, Pagination, Panel, Segmented, Textarea } from '@/components/ui'
+import { Badge, Button, Checkbox, confirm, Dialog, Empty, Field, Input, PageHeader, Pagination, Panel, Segmented, Switch, Textarea } from '@/components/ui'
 import { ainv, CrudPage, useAdmin } from '../kit'
 
 export function Announcements() {
@@ -97,30 +97,68 @@ export function Feedback() {
 
 export function Messages() {
   const plans = useAdmin<any>('/plans', { pageSize: 50 })
-  const [f, setF] = useState({ title: '', body: '', link: '', planCodes: [] as string[], userIds: '' })
+  const initial = () => ({ title: '', body: '', link: '', to: (new URLSearchParams(location.search).get('to') ? 'users' : 'all') as 'all' | 'plans' | 'users', planCodes: [] as string[], recipients: new URLSearchParams(location.search).get('to') ?? '', email: false })
+  const [f, setF] = useState(initial)
   const [busy, setBusy] = useState(false)
+  const [check, setCheck] = useState<any>(null)
+  const body = () => ({ title: f.title, body: f.body, link: f.link, email: f.email, planCodes: f.to === 'plans' ? f.planCodes : [], recipients: f.to === 'users' ? [f.recipients] : [] })
+  // who would get it, checked as the administrator types
+  useEffect(() => {
+    if (f.to === 'users' && !f.recipients.trim()) return setCheck(null)
+    if (f.to === 'plans' && !f.planCodes.length) return setCheck(null)
+    const t = setTimeout(() => adminApi.post('/messages', { ...body(), dryRun: true }).then(setCheck).catch(() => setCheck(null)), 400)
+    return () => clearTimeout(t)
+  }, [f.to, f.recipients, f.planCodes.join(',')])
+  const ready = !!f.title.trim() && !!check && check.recipients > 0 && !(check.unknown?.length)
+  const send = async () => {
+    const who = f.to === 'all' ? `全部 ${check.recipients} 位用户` : `${check.recipients} 位用户`
+    if (!(await confirm({ title: `发送给${who}？`, description: f.email && check.smtp ? `站内信之外，还会给其中有邮箱的 ${check.withEmail} 位发邮件。发出后不能撤回。` : '发出后不能撤回。', confirmText: '发送', danger: f.to === 'all' }))) return
+    setBusy(true)
+    try {
+      const r = await adminApi.post('/messages', body())
+      toast.success(`已发送给 ${r.recipients} 位用户`, { description: f.email && r.smtp ? `邮件正在后台陆续发出（${r.withEmail} 封）。` : undefined })
+      setF({ ...initial(), to: f.to })
+      setCheck(null)
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="mx-auto max-w-2xl">
-      <PageHeader title="站内信" description="向用户发送站内通知。不选择对象时发送给所有用户。" />
+      <PageHeader title="站内信" description="向用户发送站内通知，也可以同时发邮件。" />
       <Panel>
-        <div className="space-y-4">
+        <div className="space-y-5">
           <Field label="标题"><Input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
           <Field label="内容"><Textarea rows={5} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></Field>
           <Field label="跳转链接（可选）" hint="站内路径，如 /voices"><Input value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })} /></Field>
-          <Field label="按套餐发送">
-            <div className="flex flex-wrap gap-4">{(plans.data?.items ?? []).map((p: any) => <Checkbox key={p.code} checked={f.planCodes.includes(p.code)} onChange={(v) => setF({ ...f, planCodes: v ? [...f.planCodes, p.code] : f.planCodes.filter((x) => x !== p.code) })} label={p.name} />)}</div>
-          </Field>
-          <Field label="或指定用户 ID" hint="每行一个"><Textarea rows={3} value={f.userIds} onChange={(e) => setF({ ...f, userIds: e.target.value })} className="font-mono text-xs" /></Field>
-          <div className="flex justify-end"><Button variant="primary" loading={busy} disabled={!f.title.trim()} onClick={async () => {
-            setBusy(true)
-            try {
-              const r = await adminApi.post('/messages', { ...f, userIds: f.userIds.split(/\s+/).filter(Boolean) })
-              toast.success(`已发送给 ${r?.sent ?? r?.count ?? ''} 位用户`)
-              setF({ title: '', body: '', link: '', planCodes: [], userIds: '' })
-            } finally {
-              setBusy(false)
-            }
-          }}>发送</Button></div>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[13px] font-medium">发送给</span>
+              <Segmented size="sm" value={f.to} onChange={(v) => setF({ ...f, to: v })} items={[{ value: 'users', label: '指定用户' }, { value: 'plans', label: '按会员套餐' }, { value: 'all', label: '全部用户' }]} />
+            </div>
+            {f.to === 'users' && (
+              <Field hint="填邮箱、手机号或用户 ID 都可以，每行一个，也可以用逗号分隔">
+                <Textarea rows={4} value={f.recipients} onChange={(e) => setF({ ...f, recipients: e.target.value })} placeholder={'zhang@example.com\n13800138000'} className="font-mono text-xs" />
+              </Field>
+            )}
+            {f.to === 'plans' && (
+              <div className="flex flex-wrap gap-x-5 gap-y-2 rounded-[10px] bg-sunken/60 px-3 py-2.5">{(plans.data?.items ?? []).map((p: any) => <Checkbox key={p.code} checked={f.planCodes.includes(p.code)} onChange={(v) => setF({ ...f, planCodes: v ? [...f.planCodes, p.code] : f.planCodes.filter((x) => x !== p.code) })} label={p.name} />)}</div>
+            )}
+            {check && (
+              <div className="space-y-2 rounded-[10px] border border-line px-3 py-2.5 text-[13px]">
+                <div>{f.to === 'all' ? '将发送给全部用户：' : '将发送给：'}<span className="font-medium tnum">{check.recipients}</span> 位{check.smtp && <span className="text-muted">，其中 {check.withEmail} 位有邮箱</span>}</div>
+                {f.to === 'users' && check.found?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">{check.found.slice(0, 30).map((u: any) => <Badge key={u.id}>{u.nickname || '未命名'}{(u.email || u.phone) && <span className="ml-1 font-normal text-faint">{u.email || u.phone}</span>}</Badge>)}{check.found.length > 30 && <span className="text-xs text-faint">等 {check.found.length} 位</span>}</div>
+                )}
+                {check.unknown?.length > 0 && <p className="text-danger">找不到这些用户，请改正或删掉：{check.unknown.join('、')}</p>}
+              </div>
+            )}
+          </div>
+          <div>
+            <Switch checked={f.email} onChange={(v) => setF({ ...f, email: v })} disabled={check ? !check.smtp : false} label="同时发送邮件" />
+            <p className="mt-1 pl-11 text-xs text-muted">{check && !check.smtp ? '邮件服务还没有配置，请先在「系统设置」里填写 SMTP。' : '给有邮箱的用户再发一封邮件，内容和站内信相同。不选时，只有在个人设置里开启了邮件提醒的用户会收到邮件。'}</p>
+          </div>
+          <div className="flex justify-end"><Button variant="primary" loading={busy} disabled={!ready} onClick={send}>发送</Button></div>
         </div>
       </Panel>
     </div>
