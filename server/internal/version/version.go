@@ -9,7 +9,7 @@ package version
 import "runtime"
 
 var (
-	Version   = "0.1.3" // keep in step with /VERSION (a test checks it)
+	Version   = "0.1.4" // keep in step with /VERSION (a test checks it)
 	Commit    = ""
 	BuildTime = ""
 )
