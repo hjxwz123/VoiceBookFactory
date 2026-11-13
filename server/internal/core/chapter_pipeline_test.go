@@ -542,8 +542,15 @@ func TestPipelineProducesChosenChaptersAndWaitsForCredits(t *testing.T) {
 			t.Fatalf("a chapter stopped by the balance is marked failed: %v", c)
 		}
 	}
+	// the run says "waiting" a moment before the queue has parked the job and released its hold
 	var j model.Job
-	a.DB.First(&j, "id = ?", r.JobID)
+	for i := 0; i < 100; i++ {
+		a.DB.First(&j, "id = ?", r.JobID)
+		if j.Status == model.JobPaused {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if bal := a.Balance(b.StudioID); bal.Frozen != 0 || j.Status != model.JobPaused {
 		t.Fatalf("waiting run still holds %d credits (job %s)", bal.Frozen, j.Status)
 	}

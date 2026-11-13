@@ -846,6 +846,14 @@ func (a *App) PipelineAction(x *Access, run *model.PipelineRun, action string) e
 			st["casting"] = map[string]any{"status": "done", "progress": 1, "confirmed": true}
 			a.DB.Model(run).Update("stages", model.Map{V: st})
 		}
+		// a run reports "waiting" or "paused" a moment before its job has stopped: let it stop first
+		for i := 0; i < 60; i++ {
+			var j model.Job
+			if a.DB.Select("status").First(&j, "id = ?", run.JobID).Error != nil || j.Status != model.JobRunning {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		a.DB.Model(run).Updates(map[string]any{"status": "running", "wait_reason": "", "error": ""})
 		if run.Status == "failed" {
 			return a.Q.Retry(run.JobID)
