@@ -109,16 +109,13 @@ func (s *Server) productionRoutes(r chi.Router) {
 		}
 		var in struct {
 			ChapterIDs []string `json:"chapterIds"`
+			Estimate   bool     `json:"estimate"` // only say what it would read and cost
 		}
 		bind(r, &in)
-		j, err := s.app.EnqueueCharacterAnalysis(x, x.Book.ID)
-		if err != nil {
-			return nil, err
+		if in.Estimate {
+			return s.app.AnalysisEstimate(x.Book, in.ChapterIDs)
 		}
-		if len(in.ChapterIDs) > 0 {
-			s.app.DB.Model(j).Update("payload", model.Map{V: map[string]any{"chapterIds": in.ChapterIDs}})
-		}
-		return j, nil
+		return s.app.EnqueueCharacterAnalysis(x, x.Book.ID, in.ChapterIDs)
 	}))
 	r.Post("/books/{bid}/casting", h(func(r *http.Request) (any, error) {
 		x, err := s.book(r)

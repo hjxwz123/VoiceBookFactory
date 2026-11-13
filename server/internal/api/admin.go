@@ -118,6 +118,9 @@ func (s *Server) adminRoutes(r chi.Router) {
 				alerts = append(alerts, map[string]any{"level": "danger", "title": "供应商异常：" + p.Name, "detail": p.HealthNote, "link": "/admin/providers"})
 			}
 		}
+		if gaps := s.app.QueueOverview()["gaps"].([]core.QueueGap); len(gaps) > 0 {
+			alerts = append(alerts, map[string]any{"level": "danger", "title": "有会员等级没有可用的任务队列", "detail": itoa64(int64(len(gaps))) + " 类任务会一直排队，请在任务队列里让某个队列覆盖它们", "link": "/admin/jobs?tab=queues"})
+		}
 		var llm int64
 		db.Model(&model.ProviderAccount{}).Where("kind = ? AND enabled = ?", model.KindLLM, true).Count(&llm)
 		if llm == 0 {
@@ -1173,10 +1176,40 @@ func (s *Server) adminRoutes(r chi.Router) {
 		return map[string]any{"imported": n}, nil
 	}))
 
+	// ---------------- task queues ----------------
+	r.Get("/job-queues", h(func(r *http.Request) (any, error) { return s.app.QueueOverview(), nil }))
+	saveQueue := func(r *http.Request, id string) (any, error) {
+		if err := requireRole(r, model.AdminOperator); err != nil {
+			return nil, err
+		}
+		var in core.QueueInput
+		if err := bind(r, &in); err != nil {
+			return nil, err
+		}
+		q, err := s.app.SaveQueue(id, in)
+		if err != nil {
+			return nil, err
+		}
+		s.app.Audit(userOf(r).ID, "queue.save", "job_queue", q.ID, q.Name, clientIP(r), map[string]any{"lanes": q.Lanes.V, "plans": q.Plans.V, "concurrency": q.Concurrency, "enabled": q.Enabled})
+		return q, nil
+	}
+	r.Post("/job-queues", h(func(r *http.Request) (any, error) { return saveQueue(r, "") }))
+	r.Put("/job-queues/{id}", h(func(r *http.Request) (any, error) { return saveQueue(r, param(r, "id")) }))
+	r.Delete("/job-queues/{id}", h(func(r *http.Request) (any, error) {
+		if err := requireRole(r, model.AdminOperator); err != nil {
+			return nil, err
+		}
+		if err := s.app.DeleteQueue(param(r, "id")); err != nil {
+			return nil, err
+		}
+		s.app.Audit(userOf(r).ID, "queue.delete", "job_queue", param(r, "id"), "", clientIP(r), nil)
+		return nil, nil
+	}))
+
 	// ---------------- jobs ----------------
 	r.Get("/jobs", h(func(r *http.Request) (any, error) {
 		q := s.app.DB.Model(&model.Job{})
-		for p, col := range map[string]string{"status": "status", "type": "type", "studioId": "studio_id", "lane": "lane"} {
+		for p, col := range map[string]string{"status": "status", "type": "type", "studioId": "studio_id", "lane": "lane", "queueId": "queue_id", "plan": "plan_code"} {
 			if v := r.URL.Query().Get(p); v != "" {
 				q = q.Where(col+" = ?", v)
 			}

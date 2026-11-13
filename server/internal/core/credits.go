@@ -295,6 +295,24 @@ func (a *App) Hold(jobID, studioID string, amount int64) error {
 	})
 }
 
+// releasePart gives back part of a job's hold (what a finished step did not use).
+func (a *App) releasePart(jobID string, amount int64) {
+	if amount <= 0 {
+		return
+	}
+	holdMu.Lock()
+	defer holdMu.Unlock()
+	var j model.Job
+	if a.DB.Select("id", "studio_id", "credits_frozen").First(&j, "id = ?", jobID).Error != nil || j.CreditsFrozen <= 0 {
+		return
+	}
+	amount = min(amount, j.CreditsFrozen)
+	a.DB.Transaction(func(tx *gorm.DB) error {
+		tx.Model(&model.Studio{}).Where("id = ?", j.StudioID).Update("frozen", gorm.Expr("CASE WHEN frozen > ? THEN frozen - ? ELSE 0 END", amount, amount))
+		return tx.Model(&model.Job{}).Where("id = ?", jobID).Update("credits_frozen", gorm.Expr("credits_frozen - ?", amount)).Error
+	})
+}
+
 func (a *App) releaseHold(jobID string) {
 	holdMu.Lock()
 	defer holdMu.Unlock()

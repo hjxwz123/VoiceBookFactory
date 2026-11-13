@@ -9,10 +9,12 @@ import { useRunningJobs } from '@/lib/live'
 import { usePlayer } from '@/lib/player'
 import { ModelBadge, Voice, VoicePicker, VoicePlay } from '@/components/voice'
 import { Avatar, Badge, Button, Chip, cn, confirm, Dialog, Empty, Field, IconButton, Input, Menu, Panel, Segmented, Select, Sheet, Skeleton, Slider, Switch, Term, Textarea } from '@/components/ui'
-import { can, invalidate, useCharacters, useMembers } from '../../hooks'
+import { can, invalidate, useChapters, useCharacters, useMembers } from '../../hooks'
 
 export default function Characters({ book }: { book: any }) {
   const { data, isLoading } = useCharacters(book.id)
+  const chapters = useChapters(book.id)
+  const chapterTitle = (index: number) => (chapters.data ?? []).find((ch) => ch.index === index)?.title
   const [filter, setFilter] = useState('all')
   const [busy, setBusy] = useState('')
   const [edit, setEdit] = useState<any>(null)
@@ -84,7 +86,7 @@ export default function Characters({ book }: { book: any }) {
       )}
       {!list.length ? (
         <Panel padded={false}>
-          <Empty icon={<Users />} title={filter === 'all' ? '还没有角色' : '这里没有角色'} description={filter === 'all' ? '让 AI 读一遍书稿，它会找出所有会说话的角色并写好人物小传。' : undefined} action={filter === 'all' && casting && <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={analyze}>AI 分析角色</Button>} />
+          <Empty icon={<Users />} title={filter === 'all' ? '还没有角色' : '这里没有角色'} description={filter === 'all' ? '让 AI 读一遍书稿，它会找出会说话的角色并写好人物小传。也可以在「章节」里只识别某几章的角色；生成画本时遇到新角色，也会自动加入这里。' : undefined} action={filter === 'all' && casting && <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={analyze}>AI 分析角色</Button>} />
         </Panel>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -99,7 +101,7 @@ export default function Characters({ book }: { book: any }) {
                       <Badge>{kindName[c.kind] ?? c.kind}</Badge>
                       {c.claimStatus === 'pending' && <Badge tone="warn">有人申请认领</Badge>}
                     </div>
-                    <p className="mt-0.5 text-xs text-muted">{[genderName[c.gender], ageName[c.ageGroup], c.identity].filter((x) => x && x !== '未知').join(' · ') || '—'} · {c.lineCount} 句 · {num(c.charCount)} 字</p>
+                    <p className="mt-0.5 text-xs text-muted">{[genderName[c.gender], ageName[c.ageGroup], c.identity].filter((x) => x && x !== '未知').join(' · ') || '—'} · {c.lineCount} 句 · {num(c.charCount)} 字{c.firstChapter > 0 && chapterTitle(c.firstChapter) && <> · 首次出场：{chapterTitle(c.firstChapter)}</>}</p>
                     {c.profile && <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-relaxed text-muted">{c.profile}</p>}
                   </div>
                   <CharMenu book={book} c={c} all={data ?? []} onEdit={() => setEdit(c)} />

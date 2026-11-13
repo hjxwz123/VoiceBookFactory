@@ -52,6 +52,7 @@ func New(cfg *config.Config, db *gorm.DB, store *storage.Store) *App {
 	a.Q.OnUpdate = a.onJobUpdate
 	a.Q.OnFinish = a.onJobFinish
 	a.Q.PriorityOf = func(studioID string) int { return min(max(a.StudioPlan(studioID).QueuePriority, 0), 10) }
+	a.Q.PlanOf = func(studioID string) string { return a.StudioPlan(studioID).Code }
 	a.registerJobs()
 	if store != nil {
 		store.UseIndex(objectIndex{db})
@@ -62,6 +63,7 @@ func New(cfg *config.Config, db *gorm.DB, store *storage.Store) *App {
 func (a *App) Start(ctx context.Context) {
 	a.wireBus(ctx)
 	a.ApplyStorage()
+	a.loadQueues()
 	a.Q.Start(ctx)
 	go a.cron(ctx)
 }

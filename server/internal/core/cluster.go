@@ -30,7 +30,7 @@ type jobMsg struct {
 }
 
 type cacheMsg struct {
-	Kind string `json:"kind"` // setting | tts-providers
+	Kind string `json:"kind"` // setting | tts-providers | queues
 	Key  string `json:"key,omitempty"`
 }
 
@@ -73,6 +73,8 @@ func (a *App) wireBus(ctx context.Context) {
 			a.settings.Delete(m.Key)
 		case "tts-providers":
 			a.dropTTSProviders()
+		case "queues":
+			a.loadQueues()
 		}
 	})
 	if a.Bus.Kind() != "local" { // a single instance already wakes and cancels in process

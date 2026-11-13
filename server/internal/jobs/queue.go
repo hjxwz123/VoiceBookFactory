@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,7 +31,7 @@ func Permanent(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w: %v", ErrPermanent, err)
+	return fmt.Errorf("%w: %w", ErrPermanent, err) // the cause stays visible to errors.As
 }
 
 type Handler func(ctx context.Context, jc *Context) error
@@ -96,34 +97,98 @@ func (c *Context) Canceled() bool {
 	return j.CancelReq || j.Status == model.JobCanceled
 }
 
+// Lanes are the kinds of work a job can be: every job type belongs to one lane.
+var Lanes = []string{LaneDefault, LaneAudio, LanePipeline}
+
+// Pool is a group of workers: it runs jobs of the given lanes for studios on the given membership
+// plans. A job may be taken by any pool whose lanes and plans both match it, so a plan served by two
+// pools can use the capacity of both. Jobs without a studio (system work) match every plan.
+type Pool struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Size  int      `json:"size"`  // workers on this instance
+	Lanes []string `json:"lanes"` // kinds of work it takes
+	Plans []string `json:"plans"` // plan codes it serves; empty = every plan
+}
+
+type pool struct {
+	Pool
+	wake chan struct{}
+	stop context.CancelFunc
+}
+
 type Queue struct {
 	db       *gorm.DB
 	handlers map[string]Handler
-	lanes    map[string]int
 	workerID string
-	wake     map[string]chan struct{}
 	running  sync.Map // jobID -> context.CancelFunc
+
+	mu     sync.Mutex
+	config []Pool
+	pools  []*pool
+	root   context.Context // set by Start; nil before
+
 	OnUpdate func(*model.Job)
 	// PriorityOf gives the default priority for a studio's jobs (membership queue priority).
 	PriorityOf func(studioID string) int
+	// PlanOf names a studio's membership plan; it decides which pools may take the studio's jobs.
+	PlanOf   func(studioID string) string
 	OnFinish func(*model.Job)
 	// Broadcast, when set, tells the other instances of a deployment about a wake-up ("wake", lane) or
 	// a cancellation ("cancel", job id); they call Wake / CancelLocal. Nil for a single instance.
 	Broadcast func(kind, arg string)
 	wg        sync.WaitGroup
-	limiters sync.Map // key -> chan struct{}
+	limiters  sync.Map // key -> chan struct{}
 }
 
+// New makes a queue with one pool per lane, sized as given, open to every plan. SetPools replaces them.
 func New(db *gorm.DB, lanes map[string]int) *Queue {
 	host, _ := os.Hostname()
-	q := &Queue{
-		db: db, handlers: map[string]Handler{}, lanes: lanes,
-		workerID: fmt.Sprintf("%s-%d", host, os.Getpid()), wake: map[string]chan struct{}{},
-	}
-	for lane := range lanes {
-		q.wake[lane] = make(chan struct{}, 1)
+	q := &Queue{db: db, handlers: map[string]Handler{}, workerID: fmt.Sprintf("%s-%d", host, os.Getpid())}
+	for _, lane := range Lanes {
+		if n, ok := lanes[lane]; ok {
+			q.config = append(q.config, Pool{ID: "lane:" + lane, Name: lane, Size: n, Lanes: []string{lane}})
+		}
 	}
 	return q
+}
+
+// Pools returns the current pool configuration.
+func (q *Queue) Pools() []Pool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]Pool(nil), q.config...)
+}
+
+// SetPools replaces the pools. While running, workers of the old pools finish the job in hand and
+// stop; the new pools start at once, so no job is interrupted.
+func (q *Queue) SetPools(ps []Pool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.config = append([]Pool(nil), ps...)
+	if q.root != nil {
+		q.apply()
+	}
+}
+
+// apply (with q.mu held) stops the running pools and starts the configured ones.
+func (q *Queue) apply() {
+	for _, p := range q.pools {
+		p.stop()
+	}
+	q.pools = nil
+	for _, cfg := range q.config {
+		if cfg.Size <= 0 || len(cfg.Lanes) == 0 {
+			continue
+		}
+		ctx, stop := context.WithCancel(q.root)
+		p := &pool{Pool: cfg, wake: make(chan struct{}, 1), stop: stop}
+		q.pools = append(q.pools, p)
+		for i := 0; i < cfg.Size; i++ {
+			q.wg.Add(1)
+			go q.worker(ctx, p)
+		}
+	}
 }
 
 // LaneOf maps job types to lanes.
@@ -147,6 +212,9 @@ func (q *Queue) Enqueue(j *model.Job) error {
 	}
 	if j.Priority == 0 && j.StudioID != "" && q.PriorityOf != nil {
 		j.Priority = q.PriorityOf(j.StudioID)
+	}
+	if j.PlanCode == "" && j.StudioID != "" && q.PlanOf != nil {
+		j.PlanCode = q.PlanOf(j.StudioID)
 	}
 	if j.MaxAttempts == 0 {
 		j.MaxAttempts = 3
@@ -184,11 +252,16 @@ func (q *Queue) CancelLocal(jobID string) {
 	}
 }
 
+// Wake nudges the pools that take jobs of a lane.
 func (q *Queue) Wake(lane string) {
-	if ch, ok := q.wake[lane]; ok {
-		select {
-		case ch <- struct{}{}:
-		default:
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, p := range q.pools {
+		if slices.Contains(p.Lanes, lane) {
+			select {
+			case p.wake <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
@@ -243,12 +316,10 @@ func (q *Queue) Limiter(key string, n int) chan struct{} {
 
 func (q *Queue) Start(ctx context.Context) {
 	q.recover()
-	for lane, n := range q.lanes {
-		for i := 0; i < n; i++ {
-			q.wg.Add(1)
-			go q.worker(ctx, lane)
-		}
-	}
+	q.mu.Lock()
+	q.root = ctx
+	q.apply()
+	q.mu.Unlock()
 	go q.reaper(ctx)
 }
 
@@ -269,14 +340,16 @@ func (q *Queue) reaper(ctx context.Context) {
 			return
 		case <-t.C:
 			q.recover()
-			for lane := range q.lanes {
+			for _, lane := range Lanes {
 				q.Wake(lane)
 			}
 		}
 	}
 }
 
-func (q *Queue) worker(ctx context.Context, lane string) {
+// worker takes jobs for its pool until the pool stops (ctx). A job runs under the queue's root
+// context, so reconfiguring the pools never interrupts it.
+func (q *Queue) worker(ctx context.Context, p *pool) {
 	defer q.wg.Done()
 	poll := time.NewTicker(2 * time.Second)
 	defer poll.Stop()
@@ -285,40 +358,44 @@ func (q *Queue) worker(ctx context.Context, lane string) {
 			if ctx.Err() != nil {
 				return
 			}
-			j := q.claim(lane)
+			j := q.claim(p)
 			if j == nil {
 				break
 			}
-			q.run(ctx, j)
+			q.run(q.root, j)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-q.wake[lane]:
+		case <-p.wake:
 		case <-poll.C:
 		}
 	}
 }
 
-func (q *Queue) claim(lane string) *model.Job {
+func (q *Queue) claim(p *pool) *model.Job {
 	var claimed *model.Job
 	now := time.Now().UTC()
 	q.db.Transaction(func(tx *gorm.DB) error {
 		var j model.Job
-		err := tx.Where("lane = ? AND status = ? AND run_at <= ?", lane, model.JobQueued, now).
-			Order("priority desc, created_at asc").Limit(1).Find(&j).Error
+		sel := tx.Where("lane IN ? AND status = ? AND run_at <= ?", p.Lanes, model.JobQueued, now)
+		if len(p.Plans) > 0 {
+			sel = sel.Where("(plan_code = '' OR plan_code IN ?)", p.Plans)
+		}
+		err := sel.Order("priority desc, created_at asc").Limit(1).Find(&j).Error
 		if err != nil || j.ID == "" {
 			return err
 		}
 		lease := now.Add(2 * time.Minute)
 		res := tx.Model(&model.Job{}).Where("id = ? AND status = ?", j.ID, model.JobQueued).Updates(map[string]any{
-			"status": model.JobRunning, "locked_by": q.workerID, "locked_until": lease,
+			"status": model.JobRunning, "locked_by": q.workerID, "locked_until": lease, "queue_id": p.ID,
 			"started_at": now, "attempts": gorm.Expr("attempts + 1"),
 		})
 		if res.Error != nil || res.RowsAffected == 0 {
 			return res.Error
 		}
 		j.Status = model.JobRunning
+		j.QueueID = p.ID
 		j.Attempts++
 		j.StartedAt = &now
 		claimed = &j

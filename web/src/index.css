@@ -170,6 +170,9 @@ html:not(.vt-theme)::view-transition-new(root) { animation: vt-enter 0.56s cubic
 
 /* pages arrive in a short cascade: the header first, then each block under it */
 @keyframes rise { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+/* content swapped by <Fade> (pages, tabs): enter only, and visible whatever happens to the animation */
+.fade-swap { animation: fade-swap 0.2s var(--ease-out) backwards; }
+@keyframes fade-swap { from { opacity: 0; transform: translateY(4px) } }
 .page-enter > *, .page-enter > :only-child > * { animation: rise 0.5s var(--ease-out) backwards; }
 .page-enter > :only-child { animation: none; }
 .page-enter > :nth-child(2), .page-enter > :only-child > :nth-child(2) { animation-delay: 50ms; }

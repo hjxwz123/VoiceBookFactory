@@ -49,11 +49,14 @@ export default function Overview({ book }: { book: any }) {
 
   return (
     <div className="space-y-6">
-      {pl && (pl.status === 'running' || pl.status === 'queued' || pl.status === 'paused') && (
+      {pl && ['running', 'queued', 'paused', 'waiting'].includes(pl.status) && (
         <div className="flex items-center gap-4 rounded-panel border border-signal/40 bg-signal-soft px-5 py-4">
           <Wand2 className="size-5 text-warn" />
           <div className="min-w-0 flex-1">
-            <div className="text-[13.5px] font-medium">一键成书进行中 · {pl.stages?.find((s: any) => s.key === pl.stage)?.name}</div>
+            <div className="text-[13.5px] font-medium">
+              {pl.status === 'waiting' ? (pl.waitReason === 'credits' ? '一键成书已暂停：积分用完了' : '一键成书等待你确认选角') : pl.status === 'paused' ? '一键成书已暂停' : '一键成书进行中'}
+              {pl.chapters?.length ? ` · ${pl.chapters.filter((c: any) => c.status === 'done').length}/${pl.chapters.length} 章` : ''}
+            </div>
             <Progress value={pl.progress} tone="signal" className="mt-2" height={4} />
           </div>
           <Button size="sm" onClick={() => nav(`/autobook?run=${pl.id}`)}>查看进度</Button>

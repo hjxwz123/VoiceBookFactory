@@ -12,16 +12,63 @@ import (
 	"voicebook/internal/model"
 )
 
-func (a *App) EnqueueCharacterAnalysis(x *Access, bookID string) (*model.Job, error) {
+// AnalysisEstimate says what a character analysis would read and cost. No chapters = the whole book
+// (sampled, at most 72,000 characters); chosen chapters are read in full.
+func (a *App) AnalysisEstimate(b *model.Book, chapterIDs []string) (map[string]any, error) {
+	mode, words := AnalyzeSample, b.WordCount
+	if len(chapterIDs) > 0 {
+		var chs []model.Chapter
+		a.DB.Select("id", "word_count").Where("book_id = ? AND id IN ?", b.ID, chapterIDs).Find(&chs)
+		if len(chs) == 0 {
+			return nil, Bad("请选择要识别角色的章节")
+		}
+		mode, words = AnalyzeFull, 0
+		for _, c := range chs {
+			words += c.WordCount
+		}
+	}
+	read := analysisChars(mode, words)
+	return map[string]any{"mode": mode, "words": read, "credits": a.Estimate(FeatCharacter, "", float64(read)), "available": a.Balance(b.StudioID).Available}, nil
+}
+
+// EnqueueCharacterAnalysis starts a character analysis: of the whole book (sampled) when chapterIDs is
+// empty, otherwise of those chapters, read in full. Either way the results are merged into the cast.
+func (a *App) EnqueueCharacterAnalysis(x *Access, bookID string, chapterIDs []string) (*model.Job, error) {
 	var running int64
 	a.DB.Model(&model.Job{}).Where("book_id = ? AND type = ? AND status IN ?", bookID, "character_analysis", []string{model.JobQueued, model.JobRunning}).Count(&running)
 	if running > 0 {
-		return nil, Conflict("角色分析正在进行中")
+		return nil, Conflict("角色识别正在进行中，请等它完成")
 	}
 	if _, err := a.LLMFor(FeatCharacter, "", x.StudioID); err != nil {
 		return nil, err
 	}
-	j := &model.Job{Type: "character_analysis", StudioID: x.StudioID, BookID: bookID, RefType: "book", RefID: bookID, Title: "角色分析", CreatedBy: x.User.ID, MaxAttempts: 2}
+	var b model.Book
+	if err := a.DB.First(&b, "id = ?", bookID).Error; err != nil {
+		return nil, NotFound("图书")
+	}
+	est, err := a.AnalysisEstimate(&b, chapterIDs)
+	if err != nil {
+		return nil, err
+	}
+	if need, avail := est["credits"].(int64), est["available"].(int64); need > avail {
+		return nil, PaymentRequired(fmt.Sprintf("积分不足：识别角色预计需要 %d 积分，当前可用 %d", need, avail), map[string]any{"need": need, "available": avail})
+	}
+	title := "角色分析"
+	payload := map[string]any{}
+	if len(chapterIDs) > 0 {
+		var chs []model.Chapter
+		a.DB.Select("id", "title").Where("book_id = ? AND id IN ?", bookID, chapterIDs).Order("\"index\" asc").Find(&chs)
+		ids := make([]any, 0, len(chs))
+		for _, c := range chs {
+			ids = append(ids, c.ID)
+		}
+		payload["chapterIds"] = ids
+		title = "识别角色 · " + chs[0].Title
+		if len(chs) > 1 {
+			title = fmt.Sprintf("识别角色 · %s 等 %d 章", chs[0].Title, len(chs))
+		}
+	}
+	j := &model.Job{Type: "character_analysis", StudioID: x.StudioID, BookID: bookID, RefType: "book", RefID: bookID, Title: title, CreatedBy: x.User.ID, MaxAttempts: 2, Payload: model.Map{V: payload}}
 	return j, a.Q.Enqueue(j)
 }
 
@@ -32,9 +79,13 @@ func (a *App) jobCharacterAnalysis(ctx context.Context, jc *jobs.Context) error 
 		return jobs.Permanent(err)
 	}
 	var chapters []model.Chapter
-	q := a.DB.Where("book_id = ? AND included = ?", b.ID, true).Order("\"index\" asc")
+	q := a.DB.Where("book_id = ?", b.ID).Order("\"index\" asc")
+	mode := AnalyzeSample
 	if ids, ok := j.Payload.V["chapterIds"].([]any); ok && len(ids) > 0 {
-		q = q.Where("id IN ?", ids)
+		q = q.Where("id IN ?", ids) // chosen chapters count even when not marked for production
+		mode = AnalyzeFull
+	} else {
+		q = q.Where("included = ?", true)
 	}
 	q.Find(&chapters)
 	if len(chapters) == 0 {
@@ -44,27 +95,40 @@ func (a *App) jobCharacterAnalysis(ctx context.Context, jc *jobs.Context) error 
 	if err != nil {
 		return jobs.Permanent(err)
 	}
-	est := a.Estimate(FeatCharacter, "", float64(min(b.WordCount, 72000)))
-	if err := a.Hold(j.ID, b.StudioID, est); err != nil {
+	words := 0
+	for _, c := range chapters {
+		words += c.WordCount
+	}
+	if err := a.Hold(j.ID, b.StudioID, a.Estimate(FeatCharacter, "", float64(analysisChars(mode, words)))); err != nil {
 		return jobs.Permanent(err)
 	}
-	infos, chars, err := a.AnalyzeCharacters(ctx, h, chapters, func(p float64, t string) { jc.Progress(p*0.9, t) })
+	var library []model.Character
+	a.DB.Where("book_id = ?", b.ID).Order("sort_order asc").Find(&library)
+	infos, chars, err := a.AnalyzeCharacters(ctx, h, chapters, AnalyzeOptions{Mode: mode, Library: library}, func(p float64, t string) { jc.Progress(p*0.9, t) })
 	if err != nil {
 		return err
 	}
 	if _, err := a.ChargeCredits(Charge{StudioID: b.StudioID, UserID: j.CreatedBy, BookID: b.ID, JobID: j.ID, Feature: FeatCharacter, Quantity: float64(chars), Unit: "chars", AccountID: h.Account.ID, Provider: h.Account.Provider, Model: h.Client.Model(), BYOK: h.BYOK}); err != nil {
 		return jobs.Permanent(err)
 	}
-	created, updated := a.SaveCharacterInfos(&b, infos)
-	jc.SetResult(map[string]any{"found": len(infos), "created": created, "updated": updated})
-	jc.Progress(1, fmt.Sprintf("识别出 %d 个角色（新增 %d，更新 %d）", len(infos), created, updated))
-	a.Activity(b.StudioID, b.ID, j.CreatedBy, "character.analysis", "book", b.ID, fmt.Sprintf("AI 角色分析识别出 %d 个角色", len(infos)))
+	added, updated := a.SaveCharacterInfos(&b, infos)
+	jc.SetResult(map[string]any{"found": len(infos), "created": len(added), "updated": updated, "newCharacters": added})
+	msg := fmt.Sprintf("识别出 %d 个角色（新增 %d，更新 %d）", len(infos), len(added), updated)
+	if len(added) > 0 && len(added) <= 8 {
+		msg = fmt.Sprintf("识别出 %d 个角色，新加入角色库：%s", len(infos), strings.Join(added, "、"))
+	}
+	jc.Progress(1, msg)
+	a.Activity(b.StudioID, b.ID, j.CreatedBy, "character.analysis", "book", b.ID, j.Title+"："+msg)
 	a.emit(b.StudioID, eventBook(b.ID, "characters"))
 	return nil
 }
 
-// SaveCharacterInfos merges analysis results into the book's characters without overwriting user edits.
-func (a *App) SaveCharacterInfos(b *model.Book, infos []CharacterInfo) (int, int) {
+// SaveCharacterInfos merges analysis results into the book's characters without overwriting user
+// edits: known characters (by name or alias) only gain aliases and fill empty fields, unknown ones are
+// added. It returns the names added and the number of characters updated.
+func (a *App) SaveCharacterInfos(b *model.Book, infos []CharacterInfo) ([]string, int) {
+	unlock := lockBook(b.ID)
+	defer unlock()
 	var existing []model.Character
 	a.DB.Where("book_id = ?", b.ID).Find(&existing)
 	match := func(ci CharacterInfo) *model.Character {
@@ -80,7 +144,9 @@ func (a *App) SaveCharacterInfos(b *model.Book, infos []CharacterInfo) (int, int
 		}
 		return nil
 	}
-	created, updated := 0, 0
+	var added []string
+	updated := 0
+	n := len(existing)
 	for _, ci := range infos {
 		if e := match(ci); e != nil {
 			up := map[string]any{}
@@ -102,28 +168,33 @@ func (a *App) SaveCharacterInfos(b *model.Book, infos []CharacterInfo) (int, int
 			setIfEmpty("personality", e.Personality, ci.Personality)
 			setIfEmpty("voice_traits", e.VoiceTraits, ci.VoiceTraits)
 			setIfEmpty("profile", e.Profile, ci.Profile)
+			if ci.chapter > 0 && (e.FirstChapter == 0 || ci.chapter < e.FirstChapter) {
+				up["first_chapter"] = ci.chapter
+			}
 			if e.Candidate {
 				up["candidate"] = false
 				up["kind"] = ci.Kind
 			}
 			a.DB.Model(e).Updates(up)
+			e.Aliases.V = aliases
 			updated++
 			continue
 		}
 		c := model.Character{
 			BookID: b.ID, Name: truncateStr(ci.Name, 60), Aliases: model.Strings(ci.Aliases...), Kind: firstNonEmpty(ci.Kind, model.CharMinor),
 			Gender: firstNonEmpty(ci.Gender, "unknown"), AgeGroup: firstNonEmpty(ci.AgeGroup, "adult"), Identity: truncateStr(ci.Identity, 190),
-			Personality: truncateStr(ci.Personality, 490), VoiceTraits: truncateStr(ci.VoiceTraits, 490), Profile: ci.Profile, Mode: "ai",
-			Color: charColors[(len(existing)+created)%len(charColors)], SortOrder: len(existing) + created, UseCrowdPool: ci.Kind == model.CharCrowd,
+			Personality: truncateStr(ci.Personality, 490), VoiceTraits: truncateStr(ci.VoiceTraits, 490), Profile: ci.Profile, Mode: "ai", FirstChapter: ci.chapter,
+			Color: charColors[n%len(charColors)], SortOrder: n, UseCrowdPool: ci.Kind == model.CharCrowd,
 		}
 		c.Params.V = model.VoiceParams{}
 		c.Casting.V = []model.CastingCandidate{}
 		if a.DB.Create(&c).Error == nil {
-			created++
+			added = append(added, c.Name)
 			existing = append(existing, c)
+			n++
 		}
 	}
-	return created, updated
+	return added, updated
 }
 
 // MergeCharacters moves all lines of `from` into `into` and deletes `from`.

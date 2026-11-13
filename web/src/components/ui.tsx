@@ -365,12 +365,13 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
 }
 
 export function Checkbox({ checked, onChange, label, className }: { checked: boolean | 'indeterminate'; onChange: (v: boolean) => void; label?: React.ReactNode; className?: string }) {
+  const id = useId()
   return (
     <span className={cn('inline-flex items-center gap-2', className)} onClick={(e) => e.stopPropagation()}>
-      <RCheckbox.Root checked={checked} onCheckedChange={(v) => onChange(v === true)} className="grid size-4 shrink-0 place-items-center rounded-[4px] border border-line-strong bg-surface transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=indeterminate]:bg-accent data-[state=indeterminate]:border-accent">
+      <RCheckbox.Root id={id} checked={checked} onCheckedChange={(v) => onChange(v === true)} className="grid size-4 shrink-0 place-items-center rounded-[4px] border border-line-strong bg-surface transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=indeterminate]:bg-accent data-[state=indeterminate]:border-accent">
         <RCheckbox.Indicator className="text-accent-ink">{checked === 'indeterminate' ? <span className="block h-0.5 w-2 bg-current" /> : <Check className="size-3" strokeWidth={3} />}</RCheckbox.Indicator>
       </RCheckbox.Root>
-      {label && <span className="text-[13px]">{label}</span>}
+      {label && <label htmlFor={id} className="cursor-pointer text-[13px]">{label}</label>}
     </span>
   )
 }
@@ -805,13 +806,15 @@ export function Pagination({ page, pageSize, total, onChange }: { page: number; 
   )
 }
 
+// Fade swaps content (tabs, routes) with a short fade-in. It is a CSS animation on a keyed element and
+// has no exit phase: an exit that waits can get stuck when the incoming page suspends or the router
+// changes underneath it, leaving the new page invisible until a reload. A CSS animation always ends
+// with the element in its normal, visible state.
 export function Fade({ children, k, className }: { children: React.ReactNode; k: React.Key; className?: string }) {
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div key={k} className={className} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
-        {children}
-      </motion.div>
-    </AnimatePresence>
+    <div key={k} className={cn('fade-swap', className)}>
+      {children}
+    </div>
   )
 }
 

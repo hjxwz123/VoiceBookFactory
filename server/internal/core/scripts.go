@@ -2,6 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -68,20 +71,29 @@ type segDraft struct {
 	unit text.Unit
 }
 
-// labelUnits converts units + labels into segment drafts, creating candidate characters for new speakers.
-func (a *App) labelUnits(b *model.Book, units []text.Unit, res *AnnotateResult, chars []model.Character, drama bool) []model.Segment {
-	_, codes := describeCharacters(chars)
+// labelUnits converts units + labels into segment drafts. Speakers the book does not know yet join
+// its cast with what the model said about them (see AnnotateResult.NewChars); their lines are marked
+// for review. It returns the names of the characters it added.
+func (a *App) labelUnits(b *model.Book, chapterIndex int, units []text.Unit, res *AnnotateResult, chars []model.Character, drama bool) ([]model.Segment, []string) {
 	var narrator string
 	byName := map[string]string{}
+	known := map[string]bool{}
 	for _, c := range chars {
-		if c.Kind == model.CharNarrator && narrator == "" {
-			narrator = c.ID
+		known[c.ID] = true
+		if c.Kind == model.CharNarrator {
+			if narrator == "" {
+				narrator = c.ID
+			}
+			continue
 		}
 		byName[c.Name] = c.ID
 		for _, al := range c.Aliases.V {
-			byName[al] = c.ID
+			if _, taken := byName[al]; !taken {
+				byName[al] = c.ID
+			}
 		}
 	}
+	var added []string
 	newChar := func(name string) string {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -90,14 +102,47 @@ func (a *App) labelUnits(b *model.Book, units []text.Unit, res *AnnotateResult, 
 		if id, ok := byName[name]; ok {
 			return id
 		}
-		c := model.Character{BookID: b.ID, Name: truncateStr(name, 60), Kind: model.CharMinor, Gender: "unknown", AgeGroup: "adult", Candidate: true, Mode: "ai",
-			Aliases: model.Strings(), Color: charColors[len(byName)%len(charColors)], SortOrder: 900 + len(byName), Profile: "画本生成时发现的新角色，请确认后合并或保留。"}
+		unlock := lockBook(b.ID)
+		defer unlock()
+		if c := a.findCharacter(b.ID, name); c != nil { // added meanwhile by another chapter
+			byName[name] = c.ID
+			return c.ID
+		}
+		var info CharacterInfo
+		if res != nil {
+			info = res.NewChars[name]
+		}
+		var aliases []string
+		for _, al := range info.Aliases {
+			al = strings.TrimSpace(al)
+			if _, taken := byName[al]; al != "" && al != name && !taken && !contains(aliases, al) {
+				aliases = append(aliases, al)
+			}
+		}
+		kind := info.Kind
+		if _, ok := kindRank[kind]; !ok {
+			kind = model.CharMinor
+		}
+		var n int64
+		a.DB.Model(&model.Character{}).Where("book_id = ?", b.ID).Count(&n)
+		c := model.Character{
+			BookID: b.ID, Name: truncateStr(name, 60), Aliases: model.Strings(aliases...), Kind: kind,
+			Gender: firstNonEmpty(info.Gender, "unknown"), AgeGroup: firstNonEmpty(info.AgeGroup, "adult"),
+			Identity: truncateStr(info.Identity, 190), Personality: truncateStr(info.Personality, 490), VoiceTraits: truncateStr(info.VoiceTraits, 490),
+			Profile: firstNonEmpty(info.Profile, "画本生成时发现的新角色。"), FirstChapter: chapterIndex, Mode: "ai",
+			Color: charColors[int(n)%len(charColors)], SortOrder: int(n), UseCrowdPool: kind == model.CharCrowd,
+		}
 		c.Params.V = model.VoiceParams{}
 		c.Casting.V = []model.CastingCandidate{}
 		if a.DB.Create(&c).Error != nil {
 			return ""
 		}
 		byName[name] = c.ID
+		for _, al := range aliases {
+			byName[al] = c.ID
+		}
+		known[c.ID] = true
+		added = append(added, c.Name)
 		return c.ID
 	}
 	var segs []model.Segment
@@ -138,15 +183,19 @@ func (a *App) labelUnits(b *model.Book, units []text.Unit, res *AnnotateResult, 
 			if s.Type != model.SegNarration && sp == "NARRATOR" {
 				s.Type = model.SegNarration
 			}
+		case strings.HasPrefix(sp, speakerRef):
+			if id := strings.TrimPrefix(sp, speakerRef); known[id] {
+				s.CharacterID = id
+			} else {
+				s.NeedsReview = true
+			}
 		case strings.HasPrefix(sp, "NEW:"):
 			s.CharacterID = newChar(strings.TrimPrefix(sp, "NEW:"))
 			s.NeedsReview = true
 		case sp == "UNKNOWN" || sp == "":
 			s.NeedsReview = true
 		default:
-			if id, ok := codes[sp]; ok {
-				s.CharacterID = id
-			} else if id, ok := byName[sp]; ok {
+			if id, ok := byName[sp]; ok {
 				s.CharacterID = id
 			} else {
 				s.NeedsReview = true
@@ -170,7 +219,7 @@ func (a *App) labelUnits(b *model.Book, units []text.Unit, res *AnnotateResult, 
 		if s.Confidence < 0.6 {
 			s.NeedsReview = true
 		}
-		if drama && b.Settings.V.RemoveSpeechTags && lb.SpeechTag && s.Type == model.SegNarration {
+		if b.Mode != model.ModeSingle && b.Settings.V.RemoveSpeechTags && lb.SpeechTag && s.Type == model.SegNarration {
 			s.Removed = true
 		}
 		for _, p := range lb.Prons {
@@ -195,7 +244,7 @@ func (a *App) labelUnits(b *model.Book, units []text.Unit, res *AnnotateResult, 
 			segs = append(segs, sfx)
 		}
 	}
-	return segs
+	return segs, added
 }
 
 func (a *App) jobScriptParse(ctx context.Context, jc *jobs.Context) error {
@@ -220,6 +269,7 @@ func (a *App) scriptParse(ctx context.Context, j *model.Job, jc reporter, skipHo
 	drama := b.Mode == model.ModeDrama
 	var res *AnnotateResult
 	var h *LLMHandle
+	draftKey := annotationHash(ch.SourceText, drama)
 	if mode != "rules" {
 		var err error
 		h, err = a.LLMFor(FeatScript, b.Settings.V.QualityTier, b.StudioID)
@@ -231,16 +281,25 @@ func (a *App) scriptParse(ctx context.Context, j *model.Job, jc reporter, skipHo
 				return jobs.Permanent(err)
 			}
 		}
-		res, err = a.AnnotateUnits(ctx, h, units, chars, drama, func(p float64, t string) { jc.Progress(0.05+p*0.8, t) })
+		opt := AnnotateOptions{Drama: drama, Cast: a.chapterCast(&ch, chars), Resume: a.loadAnnotationDraft(ch.ID, draftKey),
+			Save: func(r *AnnotateResult) { a.saveAnnotationDraft(ch.ID, draftKey, r) }}
+		if opt.Resume != nil {
+			jc.Progress(0.05, fmt.Sprintf("接着上次的进度标注（已完成 %d 句）", len(opt.Resume.Labels)))
+		}
+		res, err = a.AnnotateUnits(ctx, h, units, chars, opt, func(p float64, t string) { jc.Progress(0.05+p*0.8, t) })
 		if err != nil {
 			return err
 		}
 	}
 	jc.Progress(0.88, "正在整理画本")
-	segs := a.labelUnits(&b, units, res, chars, drama)
+	segs, added := a.labelUnits(&b, ch.Index, units, res, chars, drama)
 	script, err := a.saveNewScript(&ch, segs, map[bool]string{true: "rules", false: "ai"}[mode == "rules"], j.CreatedBy, j.ID)
 	if err != nil {
 		return err
+	}
+	a.DB.Where("chapter_id = ?", ch.ID).Delete(&model.AnnotationDraft{})
+	if len(added) > 0 {
+		a.emit(b.StudioID, eventBook(b.ID, "characters"))
 	}
 	if drama {
 		a.matchSfxForScript(ctx, &b, script.ID)
@@ -252,10 +311,46 @@ func (a *App) scriptParse(ctx context.Context, j *model.Job, jc reporter, skipHo
 	}
 	var review int64
 	a.DB.Model(&model.Segment{}).Where("script_id = ? AND needs_review = ?", script.ID, true).Count(&review)
-	jc.SetResult(map[string]any{"scriptId": script.ID, "segments": len(segs), "needsReview": review})
-	jc.Progress(1, fmt.Sprintf("画本已生成：%d 个片段，%d 处需要确认", len(segs), review))
+	jc.SetResult(map[string]any{"scriptId": script.ID, "segments": len(segs), "needsReview": review, "newCharacters": added})
+	done := fmt.Sprintf("画本已生成：%d 个片段，%d 处需要确认", len(segs), review)
+	if len(added) > 0 {
+		done += fmt.Sprintf("；新角色 %s 已加入角色库", strings.Join(added, "、"))
+	}
+	jc.Progress(1, done)
 	a.Activity(b.StudioID, b.ID, j.CreatedBy, "script.parse", "chapter", ch.ID, fmt.Sprintf("生成了「%s」的画本（v%d）", ch.Title, script.Version))
 	return nil
+}
+
+// annotationHash identifies what a draft was made from; any change to the text discards it.
+func annotationHash(source string, drama bool) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%t|%s", drama, source)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (a *App) loadAnnotationDraft(chapterID, hash string) *AnnotateResult {
+	var d model.AnnotationDraft
+	if a.DB.Where("chapter_id = ?", chapterID).Limit(1).Find(&d).Error != nil || d.ID == "" || d.Hash != hash {
+		return nil
+	}
+	var r AnnotateResult
+	if json.Unmarshal([]byte(d.Data), &r) != nil || len(r.Labels) == 0 {
+		return nil
+	}
+	return &r
+}
+
+func (a *App) saveAnnotationDraft(chapterID, hash string, r *AnnotateResult) {
+	data, err := json.Marshal(r)
+	if err != nil {
+		return
+	}
+	var d model.AnnotationDraft
+	a.DB.Where("chapter_id = ?", chapterID).Limit(1).Find(&d)
+	if d.ID == "" {
+		a.DB.Create(&model.AnnotationDraft{ChapterID: chapterID, Hash: hash, Data: string(data)})
+		return
+	}
+	a.DB.Model(&d).Updates(map[string]any{"hash": hash, "data": string(data)})
 }
 
 // saveNewScript stores segments as a new current version, carrying over locked lines and reusable audio.
@@ -451,13 +546,13 @@ func (a *App) jobScriptSync(ctx context.Context, jc *jobs.Context) error {
 	if len(fresh) > 0 {
 		if hh, err := a.LLMFor(FeatScript, b.Settings.V.QualityTier, b.StudioID); err == nil {
 			h = hh
-			res, err = a.AnnotateUnits(ctx, h, fresh, chars, b.Mode == model.ModeDrama, func(p float64, t string) { jc.Progress(p*0.8, t) })
+			res, err = a.AnnotateUnits(ctx, h, fresh, chars, AnnotateOptions{Drama: b.Mode == model.ModeDrama, Cast: a.chapterCast(&ch, chars)}, func(p float64, t string) { jc.Progress(p*0.8, t) })
 			if err != nil {
 				return err
 			}
 		}
 	}
-	labeled := a.labelUnits(&b, fresh, res, chars, b.Mode == model.ModeDrama)
+	labeled, _ := a.labelUnits(&b, ch.Index, fresh, res, chars, b.Mode == model.ModeDrama)
 	for i := range labeled {
 		labeled[i].NeedsReview = true
 	}

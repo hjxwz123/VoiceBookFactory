@@ -44,35 +44,71 @@ type textChunk struct {
 	Chapter int
 }
 
+// What a character analysis reads.
+const (
+	AnalyzeSample  = ""        // the whole book: opening chapters plus evenly spread samples, at most 72,000 characters
+	AnalyzeOpening = "opening" // the opening chapters, at most 30,000 characters (one-click production starts here)
+	AnalyzeFull    = "full"    // every chapter given, in full (finding the characters of chosen chapters)
+
+	sampleBudget  = 72000
+	openingBudget = 30000
+	analyzeChunk  = 6000
+)
+
+// AnalyzeOptions tunes one character analysis.
+type AnalyzeOptions struct {
+	Mode string
+	// Library is the book's current cast. Characters named in a chunk are offered to the model so it
+	// reuses their names instead of inventing new ones.
+	Library []model.Character
+}
+
+// analysisChars is how many characters a run reads (for estimates and holds).
+func analysisChars(mode string, words int) int {
+	switch mode {
+	case AnalyzeFull:
+		return words
+	case AnalyzeOpening:
+		return min(words, openingBudget)
+	}
+	return min(words, sampleBudget)
+}
+
+// fullChunks cuts every chapter into pieces of chunkSize characters, up to budget (0 = no limit).
+func fullChunks(chapters []model.Chapter, chunkSize, budget int) []textChunk {
+	var out []textChunk
+	used := 0
+	for _, c := range chapters {
+		r := []rune(c.SourceText)
+		for i := 0; i < len(r); i += chunkSize {
+			if budget > 0 && used >= budget {
+				return out
+			}
+			e := min(i+chunkSize, len(r))
+			if budget > 0 {
+				e = min(e, i+budget-used)
+			}
+			out = append(out, textChunk{string(r[i:e]), c.Index})
+			used += e - i
+		}
+	}
+	return out
+}
+
 // sampleChunks picks representative text for analysis: everything if short, otherwise spread samples.
 func sampleChunks(chapters []model.Chapter, chunkSize, budget int) []textChunk {
 	total := 0
 	for _, c := range chapters {
 		total += utf8.RuneCountInString(c.SourceText)
 	}
-	var out []textChunk
 	if total <= budget {
-		for _, c := range chapters {
-			r := []rune(c.SourceText)
-			for i := 0; i < len(r); i += chunkSize {
-				e := min(i+chunkSize, len(r))
-				out = append(out, textChunk{string(r[i:e]), c.Index})
-			}
-		}
-		return out
+		return fullChunks(chapters, chunkSize, 0)
 	}
 	// first chapters fully (where most characters are introduced) then evenly spaced samples
+	out := fullChunks(chapters, chunkSize, budget/2)
 	used := 0
-	for _, c := range chapters {
-		if used >= budget/2 {
-			break
-		}
-		r := []rune(c.SourceText)
-		for i := 0; i < len(r) && used < budget/2; i += chunkSize {
-			e := min(i+chunkSize, len(r))
-			out = append(out, textChunk{string(r[i:e]), c.Index})
-			used += e - i
-		}
+	for _, c := range out {
+		used += utf8.RuneCountInString(c.Text)
 	}
 	remaining := budget - used
 	n := remaining / chunkSize
@@ -92,8 +128,16 @@ func sampleChunks(chapters []model.Chapter, chunkSize, budget int) []textChunk {
 	return out
 }
 
-func (a *App) AnalyzeCharacters(ctx context.Context, h *LLMHandle, chapters []model.Chapter, progress func(float64, string)) ([]CharacterInfo, int, error) {
-	chunks := sampleChunks(chapters, 6000, 72000)
+func (a *App) AnalyzeCharacters(ctx context.Context, h *LLMHandle, chapters []model.Chapter, opt AnalyzeOptions, progress func(float64, string)) ([]CharacterInfo, int, error) {
+	var chunks []textChunk
+	switch opt.Mode {
+	case AnalyzeFull:
+		chunks = fullChunks(chapters, analyzeChunk, 0)
+	case AnalyzeOpening:
+		chunks = fullChunks(chapters, analyzeChunk, openingBudget)
+	default:
+		chunks = sampleChunks(chapters, analyzeChunk, sampleBudget)
+	}
 	merged := map[string]*CharacterInfo{}
 	var order []string
 	totalChars := 0
@@ -117,13 +161,29 @@ func (a *App) AnalyzeCharacters(ctx context.Context, h *LLMHandle, chapters []mo
 			return nil, totalChars, ctx.Err()
 		}
 		progress(float64(i)/float64(len(chunks)), fmt.Sprintf("正在分析第 %d/%d 段文本", i+1, len(chunks)))
-		known := ""
-		if len(order) > 0 {
-			var names []string
-			for _, k := range order {
-				names = append(names, merged[k].Name)
+		// names to reuse: everyone found so far in this run, and the book's characters named in this chunk
+		var names []string
+		seen := map[string]bool{}
+		for _, k := range order {
+			names = append(names, merged[k].Name)
+			seen[merged[k].Name] = true
+		}
+		for _, c := range opt.Library {
+			if c.Kind == model.CharNarrator || seen[c.Name] || len(names) >= chapterCastLimit {
+				continue
 			}
-			known = "\n\n已识别的角色（若片段中出现请使用相同名称）：" + strings.Join(names, "、")
+			if mentions(ch.Text, c) > 0 {
+				item := c.Name
+				if len(c.Aliases.V) > 0 {
+					item += "（别名：" + strings.Join(c.Aliases.V, "、") + "）"
+				}
+				names = append(names, item)
+				seen[c.Name] = true
+			}
+		}
+		known := ""
+		if len(names) > 0 {
+			known = "\n\n已识别的角色（若片段中出现请使用相同名称，新出现的称呼写进 aliases）：" + strings.Join(names, "、")
 		}
 		var out struct {
 			Characters []CharacterInfo `json:"characters"`
@@ -229,7 +289,8 @@ var scriptSchema = obj(map[string]any{
 		"confidence": num(), "speechTag": boolean(),
 		"prons": arr(obj(map[string]any{"word": str(), "char": str(), "pinyin": str(), "homophone": str()})),
 	})),
-	"sfx": arr(obj(map[string]any{"afterId": integer(), "description": str()})),
+	"sfx":           arr(obj(map[string]any{"afterId": integer(), "description": str()})),
+	"newCharacters": arr(newCharacterSchema),
 })
 
 func perfTagKeys() []string {
@@ -255,10 +316,32 @@ func perfTagGuide() string {
 }
 
 type AnnotateResult struct {
-	Labels map[int]UnitLabel
-	Sfx    []SfxCue
-	Chars  int
+	Labels map[int]UnitLabel `json:"labels"`
+	Sfx    []SfxCue          `json:"sfx"`
+	Chars  int               `json:"chars"`
+	// NewChars holds what the model said about speakers missing from the cast, keyed by name.
+	NewChars map[string]CharacterInfo `json:"newChars"`
 }
+
+// AnnotateOptions tunes one annotation run.
+type AnnotateOptions struct {
+	Drama bool
+	// Cast is the part of the cast shown to the model (see chapterCast); nil shows every character.
+	// Speakers are still matched against every character in chars.
+	Cast []model.Character
+	// Resume carries labels from an interrupted attempt; finished batches are not sent again.
+	Resume *AnnotateResult
+	// Save is called after every finished batch with everything labelled so far.
+	Save func(*AnnotateResult)
+}
+
+var newCharacterSchema = obj(map[string]any{
+	"name": str(), "aliases": arr(str()), "kind": enum("lead", "supporting", "minor", "crowd"),
+	"gender": enum("male", "female", "unknown"), "ageGroup": enum("child", "teen", "young", "adult", "middle", "senior", "unknown"),
+	"identity": str(), "personality": str(), "voiceTraits": str(), "profile": str(),
+})
+
+const newCharacterRule = "\n【新角色】说话人不在角色表中时，speaker 填 \"NEW:角色名\"，并在 newCharacters 里为每个新角色写一份资料：name 与 NEW: 后的名字一致；aliases 为文中的其他称呼；gender、ageGroup、kind 按文中线索判断，判断不了填 unknown（kind 填 minor）；identity 写身份，personality 写性格，voiceTraits 写适合的声音特点（用于挑选音色），profile 写一句话人物小传。角色表里已有的角色、以及前面批次已经介绍过的新角色，不要再放进 newCharacters。\n"
 
 func describeCharacters(chars []model.Character) (string, map[string]string) {
 	var sb strings.Builder
@@ -294,14 +377,80 @@ func describeCharacters(chars []model.Character) (string, map[string]string) {
 	return sb.String(), ids
 }
 
-func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit, chars []model.Character, drama bool, progress func(float64, string)) (*AnnotateResult, error) {
-	charTable, _ := describeCharacters(chars)
+// speakerRef is how a resolved label names its speaker: the character's ID.
+const speakerRef = "id:"
+
+// AnnotateUnits labels the units of one chapter in batches of about 2,200 characters. Speakers come
+// back resolved: "id:<character id>" for anyone in chars (including new names that turn out to be an
+// alias of an existing character), "NEW:<name>" for people the book does not know yet, "NARRATOR" or
+// "UNKNOWN" otherwise.
+func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit, chars []model.Character, opt AnnotateOptions, progress func(float64, string)) (*AnnotateResult, error) {
+	cast := opt.Cast
+	if cast == nil {
+		cast = chars
+	}
+	charTable, codes := describeCharacters(cast)
+	codeOf := map[string]string{}
+	for code, id := range codes {
+		codeOf[id] = code
+	}
+	byName := map[string]string{}
+	nameOf := map[string]string{}
+	for _, c := range chars {
+		nameOf[c.ID] = c.Name
+		if c.Kind == model.CharNarrator {
+			continue
+		}
+		byName[c.Name] = c.ID
+		for _, al := range c.Aliases.V {
+			if _, taken := byName[al]; !taken {
+				byName[al] = c.ID
+			}
+		}
+	}
+	resolve := func(sp string) string {
+		sp = strings.TrimSpace(sp)
+		if id, ok := codes[sp]; ok {
+			return speakerRef + id
+		}
+		if name, ok := strings.CutPrefix(sp, "NEW:"); ok {
+			name = strings.TrimSpace(name)
+			if id, ok := byName[name]; ok {
+				return speakerRef + id
+			}
+			return "NEW:" + name
+		}
+		if id, ok := byName[sp]; ok { // the model wrote a name instead of a code
+			return speakerRef + id
+		}
+		return sp
+	}
+	// shown to the model as context: back to codes and names it can read
+	shown := func(sp string) string {
+		if id, ok := strings.CutPrefix(sp, speakerRef); ok {
+			if code, ok := codeOf[id]; ok {
+				return code
+			}
+			return nameOf[id]
+		}
+		return sp
+	}
 	sfxRule := "10. sfx：返回空数组。"
-	if drama {
+	if opt.Drama {
 		sfxRule = "10. sfx：这是广播剧，请在需要音效的位置给出音效提示（afterId 为音效紧跟其后的单元编号，description 为音效描述，如“推门声”“雨声渐大”），只标注对剧情有意义的音效，每 20 个单元最多 2 个。"
 	}
 	system := fill(a.promptFor(ctx, PromptScript), map[string]string{"sfx_rule": sfxRule, "tag_rule": perfTagGuide()})
-	res := &AnnotateResult{Labels: map[int]UnitLabel{}}
+	res := &AnnotateResult{Labels: map[int]UnitLabel{}, NewChars: map[string]CharacterInfo{}}
+	if r := opt.Resume; r != nil {
+		for k, v := range r.Labels {
+			res.Labels[k] = v
+		}
+		res.Sfx = append(res.Sfx, r.Sfx...)
+		res.Chars = r.Chars
+		for k, v := range r.NewChars {
+			res.NewChars[k] = v
+		}
+	}
 	// batch units by length
 	var batches [][]text.Unit
 	var cur []text.Unit
@@ -318,13 +467,32 @@ func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit
 	if len(cur) > 0 {
 		batches = append(batches, cur)
 	}
+	done := func(batch []text.Unit) bool {
+		for _, u := range batch {
+			if _, ok := res.Labels[u.Index]; !ok {
+				return false
+			}
+		}
+		return true
+	}
 	for bi, batch := range batches {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if done(batch) {
+			continue
+		}
 		progress(float64(bi)/float64(len(batches)), fmt.Sprintf("AI 正在标注第 %d/%d 批文本", bi+1, len(batches)))
 		var sb strings.Builder
 		sb.WriteString("【角色表】\n" + charTable)
+		if len(res.NewChars) > 0 {
+			var names []string
+			for name := range res.NewChars {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			sb.WriteString("【本章前面出现的新角色】" + strings.Join(names, "、") + "（继续用 NEW:名字 标注，不要再放进 newCharacters）\n")
+		}
 		// context: last units of previous batch with their labels
 		if bi > 0 {
 			prev := batches[bi-1]
@@ -332,7 +500,7 @@ func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit
 			sb.WriteString("\n【上文（已标注，仅供参考，不需要返回）】\n")
 			for _, u := range prev[start:] {
 				lb := res.Labels[u.Index]
-				fmt.Fprintf(&sb, "[%d] (%s) %s\n", u.Index, lb.Speaker, u.Text)
+				fmt.Fprintf(&sb, "[%d] (%s) %s\n", u.Index, shown(lb.Speaker), u.Text)
 			}
 		}
 		var batchText strings.Builder
@@ -351,10 +519,12 @@ func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit
 			}
 			sb.WriteString("\n【待注意多音字】" + strings.Join(poly, " ") + "\n")
 		}
+		sb.WriteString(newCharacterRule)
 		fmt.Fprintf(&sb, "\n请返回编号 %d 到 %d 的全部 %d 个单元的标注。", batch[0].Index, batch[len(batch)-1].Index, len(batch))
 		var out struct {
-			Units []UnitLabel `json:"units"`
-			Sfx   []SfxCue    `json:"sfx"`
+			Units         []UnitLabel     `json:"units"`
+			Sfx           []SfxCue        `json:"sfx"`
+			NewCharacters []CharacterInfo `json:"newCharacters"`
 		}
 		_, err := a.CallLLM(ctx, h, llm.Request{System: system, Messages: []llm.Message{{Role: "user", Content: sb.String()}}, Schema: scriptSchema, SchemaName: "script", MaxTokens: 16000}, &out)
 		if err != nil {
@@ -367,6 +537,7 @@ func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit
 		}
 		for _, l := range out.Units {
 			if valid[l.ID] {
+				l.Speaker = resolve(l.Speaker)
 				res.Labels[l.ID] = l
 			}
 		}
@@ -374,6 +545,21 @@ func (a *App) AnnotateUnits(ctx context.Context, h *LLMHandle, units []text.Unit
 			if valid[s.AfterID] && strings.TrimSpace(s.Description) != "" {
 				res.Sfx = append(res.Sfx, s)
 			}
+		}
+		for _, nc := range out.NewCharacters {
+			nc.Name = strings.TrimSpace(strings.TrimPrefix(nc.Name, "NEW:"))
+			if nc.Name == "" || nc.Name == "旁白" || nc.Name == "叙述者" {
+				continue
+			}
+			if _, known := byName[nc.Name]; known {
+				continue
+			}
+			if _, seen := res.NewChars[nc.Name]; !seen {
+				res.NewChars[nc.Name] = nc
+			}
+		}
+		if opt.Save != nil {
+			opt.Save(res)
 		}
 	}
 	progress(1, "标注完成")

@@ -18,6 +18,7 @@ import (
 func (a *App) Seed() error {
 	a.seedPlans()
 	a.seedPlanDefaults()
+	a.seedQueues()
 	a.seedPricing()
 	a.seedWorkflows()
 	a.seedPrompts()

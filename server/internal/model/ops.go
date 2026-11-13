@@ -127,6 +127,8 @@ type Job struct {
 	Base
 	Type          string     `gorm:"size:32;index" json:"type"`
 	Lane          string     `gorm:"size:16;index" json:"lane"`
+	PlanCode      string     `gorm:"size:32;index" json:"planCode"` // the studio's plan when queued (decides which queues may take it)
+	QueueID       string     `gorm:"size:64" json:"queueId"`        // the queue that took it
 	StudioID      string     `gorm:"size:36;index" json:"studioId"`
 	BookID        string     `gorm:"size:36;index" json:"bookId"`
 	ChapterID     string     `gorm:"size:36" json:"chapterId"`
@@ -623,17 +625,52 @@ type PublishedEpisode struct {
 // ---------- Pipelines & exports ----------
 
 type PipelineConfig struct {
-	Mode             string   `json:"mode"`
-	Tier             string   `json:"tier"`
-	NarratorVoiceID  string   `json:"narratorVoiceId"`
-	BGM              bool     `json:"bgm"`
-	BGMAssetID       string   `json:"bgmAssetId"`
-	IntroTemplateID  string   `json:"introTemplateId"`
-	OutroTemplateID  string   `json:"outroTemplateId"`
-	Preset           string   `json:"preset"`
-	PauseAfterCast   bool     `json:"pauseAfterCast"`
-	ChapterIDs       []string `json:"chapterIds"`
-	RemoveSpeechTags bool     `json:"removeSpeechTags"`
+	Mode            string   `json:"mode"`
+	Tier            string   `json:"tier"`
+	NarratorVoiceID string   `json:"narratorVoiceId"`
+	BGM             bool     `json:"bgm"`
+	BGMAssetID      string   `json:"bgmAssetId"`
+	IntroTemplateID string   `json:"introTemplateId"`
+	OutroTemplateID string   `json:"outroTemplateId"`
+	Preset          string   `json:"preset"`
+	PauseAfterCast  bool     `json:"pauseAfterCast"`
+	ChapterIDs      []string `json:"chapterIds"` // empty = every chapter marked for production
+	// RemoveSpeechTags drops narration lines such as "他说道" (multi-voice and drama only). Unset keeps
+	// the old default for API clients: on for drama, off otherwise.
+	RemoveSpeechTags *bool `json:"removeSpeechTags,omitempty"`
+}
+
+// SpeechTagsRemoved reports whether this run removes "他说道"-style narration lines.
+func (c PipelineConfig) SpeechTagsRemoved() bool {
+	if c.Mode == ModeSingle {
+		return false
+	}
+	if c.RemoveSpeechTags != nil {
+		return *c.RemoveSpeechTags
+	}
+	return c.Mode == ModeDrama
+}
+
+// JobQueue is an admin-defined pool of workers: which kinds of jobs it runs, for which membership
+// plans, and how many at a time on each instance.
+type JobQueue struct {
+	Base
+	Name        string     `gorm:"size:64" json:"name"`
+	Lanes       StringList `json:"lanes"` // default | audio | pipeline
+	Plans       StringList `json:"plans"` // plan codes; empty = every plan
+	Concurrency int        `json:"concurrency"`
+	Enabled     bool       `json:"enabled"`
+	SortOrder   int        `json:"sortOrder"`
+	Note        string     `gorm:"size:200" json:"note"`
+}
+
+// AnnotationDraft holds the labels of a chapter while AI annotation is still running, so a retry
+// continues after the last finished batch instead of starting the chapter again.
+type AnnotationDraft struct {
+	Base
+	ChapterID string `gorm:"size:36;uniqueIndex" json:"chapterId"`
+	Hash      string `gorm:"size:64" json:"hash"` // source text + mode; a different hash discards the draft
+	Data      string `gorm:"type:text" json:"-"`
 }
 
 type PipelineRun struct {
@@ -642,6 +679,7 @@ type PipelineRun struct {
 	BookID        string               `gorm:"size:36;index" json:"bookId"`
 	Config        JSON[PipelineConfig] `json:"config"`
 	Status        string               `gorm:"size:16;index" json:"status"` // queued | running | paused | waiting | completed | failed | canceled
+	WaitReason    string               `gorm:"size:16" json:"waitReason"`   // waiting for: "cast" (confirm the voices) | "credits" (top up)
 	Stage         string               `gorm:"size:32" json:"stage"`
 	Progress      float64              `json:"progress"`
 	Stages        Map                  `json:"stages"` // stage -> {status, progress}
@@ -688,6 +726,6 @@ func All() []any {
 		&ActivityLog{}, &AuditLog{}, &Notification{}, &Announcement{}, &Article{}, &Feedback{},
 		&Report{}, &ModerationRecord{}, &SensitiveWord{}, &SystemSetting{}, &StoredObject{},
 		&APIKey{}, &Webhook{}, &WebhookDelivery{}, &Channel{}, &Publication{}, &PublishedEpisode{},
-		&PipelineRun{}, &Export{},
+		&PipelineRun{}, &Export{}, &AnnotationDraft{}, &JobQueue{},
 	}
 }

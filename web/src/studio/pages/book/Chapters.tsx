@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { AudioLines, ChevronDown, ChevronUp, FileText, FileUp, Layers, MoreHorizontal, Pencil, Plus, Sparkles, Trash2 } from '@/components/icons'
+import { AudioLines, ChevronDown, ChevronUp, FileText, FileUp, Layers, MoreHorizontal, Pencil, Plus, Sparkles, Trash2, Users } from '@/components/icons'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -51,6 +51,14 @@ export default function Chapters({ book }: { book: any }) {
     try {
       const jobs = await api.post(`/books/${book.id}/scripts/parse`, { chapterIds: ids, mode: 'ai' })
       toast.success(`已开始生成 ${jobs.length} 章画本`)
+    } finally {
+      setBusy('')
+    }
+  }
+  const findCast = async () => {
+    setBusy('cast')
+    try {
+      await identifyCharacters(book, ids, scope, nav)
     } finally {
       setBusy('')
     }
@@ -108,6 +116,7 @@ export default function Chapters({ book }: { book: any }) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        {can(book, 'script') && <Button icon={<Users className="size-4" />} loading={busy === 'cast'} onClick={findCast}>识别角色</Button>}
         {can(book, 'script') && <Button icon={<FileText className="size-4" />} loading={busy === 'parse'} onClick={parse}>生成画本</Button>}
         {can(book, 'generate') && <Button variant="primary" icon={<AudioLines className="size-4" />} onClick={() => setGen(true)}>生成配音</Button>}
         {can(book, 'post') && <Button icon={<Layers className="size-4" />} loading={busy === 'render'} onClick={render}>合成</Button>}
@@ -190,6 +199,21 @@ export default function Chapters({ book }: { book: any }) {
   )
 }
 
+// identifyCharacters reads the chosen chapters in full, finds who speaks in them and adds anyone the
+// cast does not have yet. It says what it will read and cost before starting.
+async function identifyCharacters(book: any, chapterIds: string[], scope: string, nav: (to: string) => void) {
+  if (!chapterIds.length) return
+  const est = await api.post(`/books/${book.id}/characters/analyze`, { chapterIds, estimate: true })
+  const ok = await confirm({
+    title: `识别${scope}的角色？`,
+    description: `AI 会通读这 ${chapterIds.length} 章（${num(est.words)} 字），找出说话的角色。角色库里已有的会补全资料、不会被覆盖，没有的自动加入。预计消耗 ${num(est.credits)} 积分，当前可用 ${num(est.available)}。`,
+    confirmText: '开始识别',
+  })
+  if (!ok) return
+  await api.post(`/books/${book.id}/characters/analyze`, { chapterIds })
+  toast.success('AI 正在识别角色', { description: '完成后新角色会出现在「角色与选角」里。', action: { label: '去看看', onClick: () => nav(`/books/${book.id}/characters`) } })
+}
+
 function ChapterMenu({ book, c, i, last, move }: { book: any; c: any; i: number; last: boolean; move: (i: number, d: number) => void }) {
   const [rename, setRename] = useState(false)
   const [title, setTitle] = useState(c.title)
@@ -202,6 +226,7 @@ function ChapterMenu({ book, c, i, last, move }: { book: any; c: any; i: number;
         trigger={<IconButton label="更多" size="xs" icon={<MoreHorizontal className="size-4" />} />}
         items={[
           { label: '打开制作台', icon: <Sparkles />, onSelect: () => nav(`/books/${book.id}/chapters/${c.id}`) },
+          order && { label: '识别本章角色', icon: <Users />, onSelect: () => identifyCharacters(book, [c.id], `「${c.title}」`, nav) },
           manage && { label: '重命名', icon: <Pencil />, onSelect: () => setRename(true) },
           order && i > 0 && { label: '上移', icon: <ChevronUp />, onSelect: () => move(i, -1) },
           order && !last && { label: '下移', icon: <ChevronDown />, onSelect: () => move(i, 1) },

@@ -392,7 +392,7 @@ func (a *App) CreateBook(ctx context.Context, x *Access, in CreateBookInput) (*m
 	a.Activity(x.StudioID, b.ID, x.User.ID, "book.create", "book", b.ID, "创建了图书《"+b.Title+"》")
 	go a.ModerateBook(context.Background(), b.ID)
 	if in.AutoAnalyze && len(drafts) > 0 {
-		a.EnqueueCharacterAnalysis(x, b.ID)
+		a.EnqueueCharacterAnalysis(x, b.ID, nil)
 	}
 	return b, nil
 }
@@ -443,7 +443,7 @@ func (a *App) ImportIntoBook(ctx context.Context, x *Access, importID string, re
 		var others int64
 		a.DB.Model(&model.Character{}).Where("book_id = ? AND kind <> ?", x.Book.ID, model.CharNarrator).Count(&others)
 		if others == 0 {
-			a.EnqueueCharacterAnalysis(x, x.Book.ID)
+			a.EnqueueCharacterAnalysis(x, x.Book.ID, nil)
 		}
 	}
 	a.emit(x.StudioID, eventBook(x.Book.ID, "chapters"))

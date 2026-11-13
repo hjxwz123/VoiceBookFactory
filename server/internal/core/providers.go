@@ -94,6 +94,18 @@ func (a *App) llmFromAccount(acc *model.ProviderAccount, rule *model.RoutingRule
 
 // CallLLM runs a JSON-producing request and records health metrics on the account.
 func (a *App) CallLLM(ctx context.Context, h *LLMHandle, req llm.Request, out any) (*llm.Response, error) {
+	// chapters produced side by side share the account: at most its configured number of calls at once
+	n := h.Account.Concurrency
+	if n <= 0 {
+		n = 8
+	}
+	lim := a.Q.Limiter(fmt.Sprintf("llm:%s:%d", h.Account.ID, n), n)
+	select {
+	case lim <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-lim }()
 	start := time.Now()
 	resp, err := llm.ChatJSON(ctx, h.Client, req, out)
 	a.noteCall(h.Account.ID, time.Since(start), err)

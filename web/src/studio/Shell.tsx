@@ -4,7 +4,7 @@ import {
   AudioLines, Bell, BookOpen, Boxes, Check, ChevronsUpDown, CircleHelp, Command, Crown, FileText, Gauge, KanbanSquare, ListChecks, LogOut, Menu as MenuIcon, Mic2, Monitor, Moon, Plus,
   Search, Settings, Sparkles, Sun, User, UserRound, Wand2, Zap,
 } from '@/components/icons'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { fromNow, num } from '@/lib/format'
@@ -14,7 +14,7 @@ import { useTheme } from '@/lib/theme'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { MiniPlayerBar } from '@/components/audio'
 import { creditReach, useCreditGuide } from '@/components/plans'
-import { Avatar, Button, cn, Dialog, Empty, Field, Input, Kbd, Menu, Popover, Progress, Sheet, Tip } from '@/components/ui'
+import { Avatar, Button, cn, Dialog, Empty, Fade, Field, Input, Kbd, Menu, Popover, Progress, Sheet, Spinner, Tip } from '@/components/ui'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -107,11 +107,12 @@ export default function Shell() {
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={section} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.12 } }} transition={{ duration: 0.2 }} className="page-enter mx-auto w-full max-w-[1280px] px-4 py-7 lg:px-8">
+          {/* a new section fades in; the page loads inside it, so the frame stays put while it does */}
+          <Fade k={section} className="page-enter mx-auto w-full max-w-[1280px] px-4 py-7 lg:px-8">
+            <Suspense fallback={<div className="grid min-h-60 place-items-center"><Spinner className="size-5" /></div>}>
               <Outlet />
-            </motion.div>
-          </AnimatePresence>
+            </Suspense>
+          </Fade>
         </main>
       </div>
       <SearchPalette open={palette} onOpenChange={setPalette} />

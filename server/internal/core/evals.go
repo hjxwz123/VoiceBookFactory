@@ -50,18 +50,13 @@ func (a *App) RunEval(ctx context.Context, set *model.EvalSet, h *LLMHandle, pro
 		progress(float64(i)/float64(len(set.Items.V)), fmt.Sprintf("评测样本 %d/%d", i+1, len(set.Items.V)))
 		units := text.Segment(item.Text, 120)
 		chars := evalCharacters(item)
-		res, err := a.AnnotateUnits(ctx, h, units, chars, false, func(float64, string) {})
+		res, err := a.AnnotateUnits(ctx, h, units, chars, AnnotateOptions{}, func(float64, string) {})
 		if err != nil {
 			return nil, err
 		}
-		_, codes := describeCharacters(chars)
 		nameOf := map[string]string{"NARRATOR": "旁白"}
-		for code, id := range codes {
-			for _, c := range chars {
-				if c.ID == id {
-					nameOf[code] = c.Name
-				}
-			}
+		for _, c := range chars {
+			nameOf[speakerRef+c.ID] = c.Name
 		}
 		for _, exp := range item.Expected {
 			lb, ok := res.Labels[exp.Index]
@@ -156,7 +151,7 @@ func (a *App) TestPrompt(ctx context.Context, key, content, sample, accountID st
 	case PromptScript:
 		units := text.Segment(sample, 120)
 		chars := []model.Character{{Base: model.Base{ID: "narrator"}, Name: "旁白", Kind: model.CharNarrator}}
-		res, err := a.AnnotateUnits(ctx, h, units, chars, false, func(float64, string) {})
+		res, err := a.AnnotateUnits(ctx, h, units, chars, AnnotateOptions{}, func(float64, string) {})
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +163,7 @@ func (a *App) TestPrompt(ctx context.Context, key, content, sample, accountID st
 		return map[string]any{"units": out, "sfx": res.Sfx}, nil
 	case PromptCharacters:
 		ch := model.Chapter{SourceText: sample, Index: 1}
-		infos, _, err := a.AnalyzeCharacters(ctx, h, []model.Chapter{ch}, func(float64, string) {})
+		infos, _, err := a.AnalyzeCharacters(ctx, h, []model.Chapter{ch}, AnalyzeOptions{Mode: AnalyzeFull}, func(float64, string) {})
 		return map[string]any{"characters": infos}, err
 	default:
 		return nil, Bad("该提示词暂不支持在测试台运行，请在实际功能中验证")

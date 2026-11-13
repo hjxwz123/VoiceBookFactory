@@ -10,7 +10,7 @@ import { create } from 'zustand'
 import { adminApi } from '@/lib/api'
 import { useTheme } from '@/lib/theme'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { Avatar, Button, cn, Dialog, Field, Input, Menu, Spinner } from '@/components/ui'
+import { Avatar, Button, cn, Dialog, Fade, Field, Input, Menu, Spinner } from '@/components/ui'
 import { ainv } from './kit'
 
 type AdminState = { ready: boolean; me: any; load: () => Promise<void> }
@@ -168,16 +168,14 @@ function Shell() {
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={loc.pathname.split('/')[1]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.12 } }} transition={{ duration: 0.2 }} className="page-enter mx-auto w-full max-w-[1320px] px-6 py-7">
+          <Fade k={loc.pathname.split('/')[1]} className="page-enter mx-auto w-full max-w-[1320px] px-6 py-7">
               <Suspense fallback={<div className="grid h-40 place-items-center"><Spinner /></div>}>
                 <Routes>
                   {routes.map(([to, , , C]) => <Route key={to} path={to === '/' ? '/' : to + '/*'} element={<C />} />)}
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Suspense>
-            </motion.div>
-          </AnimatePresence>
+          </Fade>
         </main>
       </div>
       <ChangePassword open={pwdOpen} onOpenChange={setPwdOpen} />

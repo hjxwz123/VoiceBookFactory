@@ -1,16 +1,17 @@
-// Package dbtest gives each test a fresh, migrated database: SQLite in memory by default, or a private
-// schema on the PostgreSQL named by VB_TEST_PG_DSN (CI runs the whole suite both ways).
+// Package dbtest gives each test a fresh, migrated database: a SQLite file opened exactly as in
+// production (WAL, busy timeout, immediate transactions) by default, or a private schema on the
+// PostgreSQL named by VB_TEST_PG_DSN (CI runs the whole suite both ways).
 package dbtest
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -28,10 +29,13 @@ func Open(t testing.TB) *gorm.DB {
 	if dsn := os.Getenv("VB_TEST_PG_DSN"); dsn != "" {
 		return openPostgres(t, dsn)
 	}
-	g, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	// a file rather than shared-cache memory: concurrent writers then wait for each other as they do
+	// in production instead of failing with "database table is locked"
+	g, err := db.Open("sqlite", filepath.Join(t.TempDir(), "test.db"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	g.Logger = logger.Default.LogMode(logger.Silent)
 	if err := db.Migrate(g); err != nil {
 		t.Fatal(err)
 	}
