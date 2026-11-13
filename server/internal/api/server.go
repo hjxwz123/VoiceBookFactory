@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +32,16 @@ type Server struct {
 	app *core.App
 }
 
-func New(app *core.App) *Server { return &Server{app: app} }
+func New(app *core.App) *Server {
+	errorLog = func(r *http.Request, status int, public, detail string) string {
+		uid := ""
+		if u, ok := r.Context().Value(keyUser).(*model.User); ok && u != nil {
+			uid = u.ID
+		}
+		return app.LogError(uid, r.Method, r.URL.Path, status, public, detail)
+	}
+	return &Server{app: app}
+}
 
 type ctxKey int
 
@@ -304,11 +315,116 @@ func h(fn func(r *http.Request) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := fn(r)
 		if err != nil {
+			if public(r) {
+				failPublic(w, r, err)
+				return
+			}
 			fail(w, err)
+			return
+		}
+		if public(r) {
+			okPublic(w, v)
 			return
 		}
 		ok(w, v)
 	}
+}
+
+// public reports whether a request comes from users (the studio app, the open API) rather than
+// administrators: users never see technical error detail.
+func public(r *http.Request) bool { return !strings.HasPrefix(r.URL.Path, "/api/admin/") }
+
+// errorLog keeps the full error behind a plain message shown to a user; set by NewServer.
+var errorLog func(r *http.Request, status int, public, detail string) string
+
+// failPublic answers a user's request that failed. Messages written for users go out as they are;
+// anything technical is replaced by a plain explanation and a reference, and the full error goes to
+// the error log for administrators.
+func failPublic(w http.ResponseWriter, r *http.Request, err error) {
+	var ce *core.Error
+	if errors.As(err, &ce) {
+		msg := core.PublicText(ce.Msg)
+		if msg != ce.Msg && errorLog != nil {
+			msg += "（编号 " + errorLog(r, ce.Status, msg, ce.Msg) + "）"
+		}
+		body := map[string]any{"code": ce.Code, "message": msg}
+		if ce.Data != nil {
+			body["data"] = ce.Data
+		}
+		writeJSON(w, ce.Status, map[string]any{"error": body})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "duplicate key") {
+		fail(w, err)
+		return
+	}
+	slog.Error("request failed", "path", r.URL.Path, "err", err)
+	msg := core.PublicText(err.Error())
+	if msg == err.Error() { // not recognisably technical, but not written for users either
+		msg = core.GenericFailure
+	}
+	if errorLog != nil {
+		msg += "（编号 " + errorLog(r, 500, msg, err.Error()) + "）"
+	}
+	writeJSON(w, 500, map[string]any{"error": map[string]any{"code": "internal", "message": msg}})
+}
+
+// errorFields matches the fields that carry stored error messages in responses and events.
+var errorFields = regexp.MustCompile(`"(error|lastError|statusNote)":"[^"]`)
+
+// okPublic answers a user's request, with stored error messages in plain words (see core.PublicText).
+func okPublic(w http.ResponseWriter, v any) {
+	if v == nil {
+		v = map[string]any{"ok": true}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		writeJSON(w, 200, v)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	w.Write(publicJSON(b))
+	w.Write([]byte("\n"))
+}
+
+// publicJSON rewrites error fields of an encoded value for users. Values without any are returned
+// untouched (the common case costs one scan).
+func publicJSON(b []byte) []byte {
+	if !errorFields.Match(b) {
+		return b
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil {
+		return b
+	}
+	var walk func(any)
+	walk = func(x any) {
+		switch t := x.(type) {
+		case map[string]any:
+			for k, val := range t {
+				if s, ok := val.(string); ok && (k == "error" || k == "lastError" || k == "statusNote") {
+					t[k] = core.PublicText(s)
+					continue
+				}
+				walk(val)
+			}
+		case []any:
+			for _, e := range t {
+				walk(e)
+			}
+		}
+	}
+	walk(v)
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return b
+	}
+	return bytes.TrimRight(out.Bytes(), "\n")
 }
 
 // ---------- access loaders ----------
@@ -513,6 +629,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case ev := <-sub.C:
 			b, _ := json.Marshal(ev)
+			if public(r) {
+				b = publicJSON(b)
+			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
 			flusher.Flush()
 		case <-ping.C:

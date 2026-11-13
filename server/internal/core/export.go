@@ -293,13 +293,20 @@ func firstNonZeroInt(vals ...int) int {
 	return 0
 }
 
-// renderStems renders one WAV per character plus the music/effects tracks.
+// renderStems renders one WAV per character plus the music/effects tracks. At another voice speed
+// (book settings) the voice stems change speed as the finished chapter does, and music and effects
+// move to where they land in it, so the stems line up with the chapter.
 func (a *App) renderStems(ctx context.Context, ch *model.Chapter, dir string) (map[string]string, error) {
 	tl, err := a.BuildTimeline(ch, false)
 	if err != nil {
 		return nil, err
 	}
+	var b model.Book
+	a.DB.Select("id", "settings").First(&b, "id = ?", ch.BookID)
+	tempo := b.Settings.V.Flow.TempoOf()
+	at := tempoMap(tl, tempo)
 	chars := a.charMap(ch.BookID)
+	voices := map[string][]audio.MixClip{}
 	groups := map[string][]audio.MixClip{}
 	for _, d := range tl.Dialogue {
 		if d.Missing {
@@ -313,24 +320,59 @@ func (a *App) renderStems(ctx context.Context, ch *model.Chapter, dir string) (m
 		if c := chars[d.CharacterID]; c != nil {
 			name = c.Name
 		}
-		groups[name] = append(groups[name], audio.MixClip{Source: p, StartMs: d.StartMs, DurationMs: d.DurationMs, GainDB: d.VolumeDB, Filter: audio.FilterChain(d.Effects)})
+		voices[name] = append(voices[name], audio.MixClip{Source: p, StartMs: d.StartMs, DurationMs: d.DurationMs, GainDB: d.VolumeDB, Filter: audio.FilterChain(d.Effects)})
 	}
 	for _, s := range tl.Sfx {
 		if p, _, err := a.AssetPath(s.AssetID); err == nil {
-			groups["音效"] = append(groups["音效"], audio.MixClip{Source: p, StartMs: s.StartMs})
+			groups["音效"] = append(groups["音效"], audio.MixClip{Source: p, StartMs: at(s.StartMs)})
+		}
+	}
+	total := tl.DurationMs
+	if tempo != 1 {
+		total = at(tl.SpeechEnd) + tl.TailMs
+		for _, tr := range tl.Tracks {
+			for _, c := range tr.Resolved {
+				if !c.Fill {
+					total = max(total, at(c.AbsStartMs)+c.AbsDurMs)
+				}
+			}
 		}
 	}
 	for _, tr := range tl.Tracks {
 		for _, c := range tr.Resolved {
 			if p, _, err := a.AssetPath(c.AssetID); err == nil {
-				groups[tr.Name] = append(groups[tr.Name], audio.MixClip{Source: p, StartMs: c.AbsStartMs, OffsetMs: c.OffsetMs, DurationMs: c.AbsDurMs, Loop: c.Loop || c.Fill, GainDB: tr.Volume + c.Volume, FadeInMs: c.FadeInMs, FadeOutMs: c.FadeOutMs})
+				start, dur := at(c.AbsStartMs), c.AbsDurMs
+				if c.Fill {
+					dur = total - start
+				}
+				groups[tr.Name] = append(groups[tr.Name], audio.MixClip{Source: p, StartMs: start, OffsetMs: c.OffsetMs, DurationMs: dur, Loop: c.Loop || c.Fill, GainDB: tr.Volume + c.Volume, FadeInMs: c.FadeInMs, FadeOutMs: c.FadeOutMs})
 			}
 		}
 	}
 	out := map[string]string{}
+	k := 0
+	for name, clips := range voices {
+		k++
+		if tempo == 1 {
+			groups[name] = append(groups[name], clips...)
+			continue
+		}
+		for i := range clips {
+			clips[i].StartMs -= tl.HeadMs
+		}
+		raw := filepath.Join(dir, fmt.Sprintf("stem-%s-v%d-raw.wav", ch.ID[:8], k))
+		sped := filepath.Join(dir, fmt.Sprintf("stem-%s-v%d-tempo.wav", ch.ID[:8], k))
+		if _, err := a.FF.Mix(ctx, clips, raw, audio.MixOptions{TotalMs: tl.SpeechEnd - tl.HeadMs}); err != nil {
+			return nil, err
+		}
+		if err := a.FF.Tempo(ctx, raw, sped, tempo); err != nil {
+			return nil, err
+		}
+		groups[name] = append(groups[name], audio.MixClip{Source: sped, StartMs: tl.HeadMs})
+	}
 	for name, clips := range groups {
 		p := filepath.Join(dir, fmt.Sprintf("stem-%s-%d.wav", ch.ID[:8], len(out)))
-		if _, err := a.FF.Mix(ctx, clips, p, audio.MixOptions{TotalMs: tl.DurationMs}); err != nil {
+		if _, err := a.FF.Mix(ctx, clips, p, audio.MixOptions{TotalMs: total}); err != nil {
 			return nil, err
 		}
 		out[name] = p

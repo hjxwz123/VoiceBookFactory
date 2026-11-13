@@ -9,9 +9,19 @@ import { ManageTemplatesLink, TemplatePreviewButton, templateOptions, useTemplat
 import { can, invalidate, useChapters } from '../../hooks'
 import { useLeaveGuard } from '@/components/net'
 
+// pause presets (ms); chapter head/tail are left as they are
+const RHYTHMS = {
+  compact: { clauseMs: 200, sameSpeakerMs: 400, speakerChangeMs: 550, paragraphMs: 800, sceneMs: 1400 },
+  standard: { clauseMs: 250, sameSpeakerMs: 550, speakerChangeMs: 700, paragraphMs: 1000, sceneMs: 1800 },
+  relaxed: { clauseMs: 350, sameSpeakerMs: 750, speakerChangeMs: 900, paragraphMs: 1300, sceneMs: 2300 },
+}
+const RECOMMENDED_FLOW = { smooth: true, fadeMs: 30, duckHoldMs: 1500, roomTone: false, tempo: 1 }
+// keep the user's own fade and hold values when smoothing is switched back on
+const pick = (fl: any) => Object.fromEntries(Object.entries(fl ?? {}).filter(([k, v]) => (k === 'fadeMs' || k === 'duckHoldMs') && Number(v) > 0))
+
 export default function BookSettings({ book }: { book: any }) {
   const nav = useNavigate()
-  const initial = () => ({ title: book.title, author: book.author, narrator: book.narrator, publisher: book.publisher, isbn: book.isbn, genre: book.genre, mode: book.mode, tagsText: (book.tags ?? []).join('、'), copyright: { ...book.copyright }, settings: { ...book.settings, pause: { ...book.settings.pause } } })
+  const initial = () => ({ title: book.title, author: book.author, narrator: book.narrator, publisher: book.publisher, isbn: book.isbn, genre: book.genre, mode: book.mode, tagsText: (book.tags ?? []).join('、'), copyright: { ...book.copyright }, settings: { ...book.settings, pause: { ...book.settings.pause }, flow: { ...(book.settings.flow ?? {}) } } })
   const [f, setF] = useState(initial)
   const [saved, setSaved] = useState(() => JSON.stringify(initial()))
   const dirty = useMemo(() => JSON.stringify(f) !== saved, [f, saved])
@@ -26,6 +36,9 @@ export default function BookSettings({ book }: { book: any }) {
   const s = f.settings
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } })
   const setP = (k: string, v: number) => setF({ ...f, settings: { ...s, pause: { ...s.pause, [k]: v } } })
+  const setFlow = (k: string, v: any) => setF({ ...f, settings: { ...s, flow: { ...s.flow, [k]: v } } })
+  const legacy = !s.flow?.smooth && !s.pause?.clauseMs
+  const useRecommended = () => setF({ ...f, settings: { ...s, pause: { ...s.pause, ...RHYTHMS.standard, chapterHeadMs: s.pause.chapterHeadMs || 1000, chapterTailMs: s.pause.chapterTailMs || 2000 }, flow: { ...RECOMMENDED_FLOW, roomTone: !!s.flow?.roomTone, tempo: s.flow?.tempo || 1 } } })
   const tpl = (kind: 'intro' | 'outro') => templateOptions(templates.data, kind)
 
   const save = async () => {
@@ -37,12 +50,12 @@ export default function BookSettings({ book }: { book: any }) {
       setSaved(JSON.stringify(f))
       invalidate(['book', book.id], ['books'])
       // pauses, loudness, music ducking and bookends only reach the audio after re-rendering
-      const soundKeys = ['pause', 'loudnessPreset', 'duckingDb', 'introTemplateId', 'outroTemplateId', 'monologueReverb', 'aiLabel']
+      const soundKeys = ['pause', 'flow', 'loudnessPreset', 'duckingDb', 'introTemplateId', 'outroTemplateId', 'monologueReverb', 'aiLabel']
       const soundChanged = soundKeys.some((k) => JSON.stringify(before?.[k]) !== JSON.stringify(f.settings[k]))
       const rendered = (chapters.data ?? []).filter((c) => c.included && c.renderId)
       if (soundChanged && rendered.length && can(book, 'post')) {
         toast.success('设置已保存', {
-          description: `已合成的 ${rendered.length} 章要重新合成才会用上新的停顿、响度或片头片尾。`,
+          description: `已合成的 ${rendered.length} 章要重新合成才会用上新的停顿、语速、响度或片头片尾。不需要重新配音。`,
           duration: 10000,
           action: {
             label: '全部重新合成',
@@ -59,7 +72,17 @@ export default function BookSettings({ book }: { book: any }) {
       setBusy(false)
     }
   }
-  const pauses: [string, string][] = [['sameSpeakerMs', '同一人连续说话'], ['speakerChangeMs', '换人说话'], ['paragraphMs', '段落之间'], ['sceneMs', '场景切换'], ['chapterHeadMs', '章节开头留白'], ['chapterTailMs', '章节结尾留白']]
+  const pauses: [string, string, string][] = [
+    ['clauseMs', '逗号处', '长句在逗号、顿号、分号处断开时'],
+    ['sameSpeakerMs', '句与句之间', '同一个人说完一句、接着说下一句'],
+    ['speakerChangeMs', '换人说话', '旁白和角色、角色和角色之间'],
+    ['paragraphMs', '段落之间', ''],
+    ['sceneMs', '场景切换', '原文里的空行或分隔符'],
+    ['chapterHeadMs', '章节开头留白', ''],
+    ['chapterTailMs', '章节结尾留白', ''],
+  ]
+  const rhythm = (Object.keys(RHYTHMS) as (keyof typeof RHYTHMS)[]).find((k) => Object.entries(RHYTHMS[k]).every(([pk, v]) => s.pause[pk] === v)) ?? 'custom'
+  const tempo = s.flow?.tempo || 1
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 pb-20">
@@ -102,18 +125,58 @@ export default function BookSettings({ book }: { book: any }) {
               )
             })}
           </div>
-          <Field label={`预估语速 ${s.speechRate} 字/分钟`} hint="用于估算时长，不影响实际配音速度"><Slider value={s.speechRate} min={150} max={320} step={10} onChange={(v) => setS('speechRate', v)} /></Field>
           <Field label={`背景音乐避让 ${s.duckingDb} dB`} hint="有人说话时自动压低背景音乐"><Slider value={s.duckingDb} min={-24} max={0} step={1} onChange={(v) => setS('duckingDb', v)} /></Field>
-          <div>
-            <div className="mb-3 text-[13px] font-medium">句间停顿（毫秒）</div>
-            <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-              {pauses.map(([k, l]) => (
-                <Field key={k} label={<span className="flex w-full justify-between"><span>{l}</span><span className="text-faint tnum">{s.pause[k]} ms</span></span>}>
-                  <Slider value={s.pause[k]} min={0} max={k.startsWith('chapter') ? 5000 : 3000} step={50} onChange={(v) => setP(k, v)} />
-                </Field>
-              ))}
+          <div className="space-y-5 rounded-[12px] border border-line p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-[14px] font-medium">停顿与语速</div>
+              <div className="text-xs text-muted">只影响合成出来的成品，画本和已生成的配音不会改变</div>
+            </div>
+            {legacy && (
+              <div className="flex flex-wrap items-center gap-3 rounded-[10px] bg-signal-soft px-3 py-2.5 text-[12.5px] text-warn">
+                <span className="min-w-0 flex-1">这本书用的是旧版节奏：逗号和句号停顿一样长，句子边缘没有淡化，句间背景音乐会忽大忽小。推荐设置听起来更自然，保存并重新合成后生效。</span>
+                <Button size="xs" onClick={useRecommended}>使用推荐设置</Button>
+              </div>
+            )}
+            <Field label={<span className="flex w-full justify-between"><span>语速</span><span className="text-faint tnum">{tempo.toFixed(2)}×</span></span>} hint="整章人声合成好以后整体变速，音调不变；背景音乐和音效保持原速。改语速不用重新配音，重新合成即可。制作台里逐句试听仍是原速。">
+              <div className="flex flex-wrap items-center gap-3">
+                <Slider className="min-w-40 flex-1" value={tempo} min={0.7} max={1.5} step={0.05} onChange={(v) => setFlow('tempo', Math.round(v * 100) / 100)} />
+                <div className="flex gap-1">{[0.9, 1, 1.1, 1.2].map((v) => <Button key={v} size="xs" variant={Math.abs(tempo - v) < 0.001 ? 'primary' : 'secondary'} onClick={() => setFlow('tempo', v)}>{v === 1 ? '原速' : `${v}×`}</Button>)}</div>
+              </div>
+            </Field>
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[13px] font-medium">停顿节奏</span>
+                <Segmented size="sm" value={rhythm} onChange={(v) => v !== 'custom' && setF({ ...f, settings: { ...s, pause: { ...s.pause, ...RHYTHMS[v as keyof typeof RHYTHMS] } } })} items={[{ value: 'compact', label: '紧凑' }, { value: 'standard', label: '标准' }, { value: 'relaxed', label: '舒缓' }, { value: 'custom', label: '自定义' }]} />
+              </div>
+              <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                {pauses.map(([k, l, hint]) => {
+                  const v = k === 'clauseMs' && !s.pause.clauseMs ? s.pause.sameSpeakerMs : s.pause[k]
+                  return (
+                    <Field key={k} label={<span className="flex w-full justify-between"><span>{l}</span><span className="text-faint tnum">{v} ms</span></span>} hint={hint || undefined}>
+                      <Slider value={v} min={k === 'clauseMs' ? 50 : 0} max={k.startsWith('chapter') ? 5000 : 3000} step={50} onChange={(nv) => setP(k, nv)} />
+                    </Field>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="space-y-3 border-t border-line pt-4">
+              <div>
+                <Switch checked={!!s.flow?.smooth} onChange={(v) => setF({ ...f, settings: { ...s, flow: v ? { ...RECOMMENDED_FLOW, ...pick(s.flow), smooth: true } : { ...s.flow, smooth: false } } })} label="平滑衔接" />
+                <p className="mt-1 pl-11 text-xs text-muted">每句开头结尾轻轻淡入淡出，避免生硬的切换和爆音；句间停顿不长时，背景音乐保持压低，不会忽大忽小。</p>
+              </div>
+              {s.flow?.smooth && (
+                <div className="grid gap-x-6 gap-y-4 pl-11 sm:grid-cols-2">
+                  <Field label={<span className="flex w-full justify-between"><span>句子边缘淡化</span><span className="text-faint tnum">{s.flow.fadeMs || 0} ms</span></span>}><Slider value={s.flow.fadeMs || 0} min={0} max={120} step={5} onChange={(v) => setFlow('fadeMs', v)} /></Field>
+                  <Field label={<span className="flex w-full justify-between"><span>停顿短于多少时音乐保持压低</span><span className="text-faint tnum">{s.flow.duckHoldMs || 0} ms</span></span>}><Slider value={s.flow.duckHoldMs || 0} min={0} max={4000} step={100} onChange={(v) => setFlow('duckHoldMs', v)} /></Field>
+                </div>
+              )}
+              <div>
+                <Switch checked={!!s.flow?.roomTone} onChange={(v) => setFlow('roomTone', v)} label="句间加入轻微底噪" />
+                <p className="mt-1 pl-11 text-xs text-muted">在人声下面铺一层很轻的环境底噪，停顿时不是完全无声，适合没有背景音乐的章节。</p>
+              </div>
             </div>
           </div>
+          <Field label={`估算时长用的语速 ${s.speechRate} 字/分钟`} hint="只用来估算成品时长，不改变配音速度"><Slider value={s.speechRate} min={150} max={320} step={10} onChange={(v) => setS('speechRate', v)} /></Field>
           <div className="space-y-3">
             <Switch checked={s.removeSpeechTags} onChange={(v) => setS('removeSpeechTags', v)} label="去掉“他说道”之类的提示语（广播剧常用）" />
             <Switch checked={s.monologueReverb} onChange={(v) => setS('monologueReverb', v)} label="内心独白自动加混响" />

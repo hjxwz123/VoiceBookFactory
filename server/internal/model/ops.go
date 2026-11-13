@@ -664,6 +664,19 @@ type JobQueue struct {
 	Note        string     `gorm:"size:200" json:"note"`
 }
 
+// ErrorLog records a failure that users were shown only in plain words, with the full message for
+// administrators. Users quote the reference.
+type ErrorLog struct {
+	Base
+	Ref     string `gorm:"size:16;index" json:"ref"`
+	UserID  string `gorm:"size:36;index" json:"userId"`
+	Method  string `gorm:"size:8" json:"method"`
+	Path    string `gorm:"size:255" json:"path"`
+	Status  int    `json:"status"`
+	Message string `gorm:"size:500" json:"message"` // what the user saw
+	Detail  string `gorm:"type:text" json:"detail"` // the full error
+}
+
 // AnnotationDraft holds the labels of a chapter while AI annotation is still running, so a retry
 // continues after the last finished batch instead of starting the chapter again.
 type AnnotationDraft struct {
@@ -726,6 +739,6 @@ func All() []any {
 		&ActivityLog{}, &AuditLog{}, &Notification{}, &Announcement{}, &Article{}, &Feedback{},
 		&Report{}, &ModerationRecord{}, &SensitiveWord{}, &SystemSetting{}, &StoredObject{},
 		&APIKey{}, &Webhook{}, &WebhookDelivery{}, &Channel{}, &Publication{}, &PublishedEpisode{},
-		&PipelineRun{}, &Export{}, &AnnotationDraft{}, &JobQueue{},
+		&PipelineRun{}, &Export{}, &AnnotationDraft{}, &JobQueue{}, &ErrorLog{},
 	}
 }

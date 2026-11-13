@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -51,6 +52,7 @@ type Timeline struct {
 	DurationMs int64     `json:"durationMs"`
 	HeadMs     int64     `json:"headMs"`
 	TailMs     int64     `json:"tailMs"`
+	SpeechEnd  int64     `json:"speechEndMs"` // where the last line (or effect) ends
 	Missing    int       `json:"missing"`
 	DuckingDb  float64   `json:"duckingDb"`
 	Intro      bool      `json:"intro"`
@@ -83,7 +85,7 @@ func (a *App) BuildTimeline(ch *model.Chapter, withURLs bool) (*Timeline, error)
 	a.DB.First(&b, "id = ?", ch.BookID)
 	rules := b.Settings.V.Pause
 	if rules.SameSpeakerMs == 0 {
-		rules = model.DefaultPauseRules()
+		rules = model.LegacyPauseRules()
 	}
 	rate := b.Settings.V.SpeechRate
 	if rate <= 0 {
@@ -162,6 +164,11 @@ func (a *App) BuildTimeline(ch *model.Chapter, withURLs bool) (*Timeline, error)
 				gap = int64(rules.ParagraphMs)
 			case s.CharacterID != prev.CharacterID:
 				gap = int64(rules.SpeakerChangeMs)
+				if rules.ClauseMs > 0 && endsClause(prev.Text) { // “你来了，”黛玉说，“坐吧。”
+					gap = int64(rules.ClauseMs+rules.SpeakerChangeMs) / 2
+				}
+			case rules.ClauseMs > 0 && endsClause(prev.Text):
+				gap = int64(rules.ClauseMs)
 			default:
 				gap = int64(rules.SameSpeakerMs)
 			}
@@ -200,6 +207,7 @@ func (a *App) BuildTimeline(ch *model.Chapter, withURLs bool) (*Timeline, error)
 		cursor += int64(*prev.PauseAfterMs)
 	}
 	speechEnd := cursor
+	tl.SpeechEnd = speechEnd
 	tl.DurationMs = speechEnd + tl.TailMs
 	// mix tracks
 	mix := a.mixFor(ch)
@@ -248,6 +256,25 @@ func (a *App) BuildTimeline(ch *model.Chapter, withURLs bool) (*Timeline, error)
 		tl.Tracks = append(tl.Tracks, t)
 	}
 	return tl, nil
+}
+
+// tempoMap maps a position on a chapter's 1x timeline to where it lands when the voice is played at
+// another speed: the opening silence keeps its length, everything after it stretches.
+func tempoMap(tl *Timeline, tempo float64) func(int64) int64 {
+	return func(t int64) int64 {
+		if tempo == 1 || t <= tl.HeadMs {
+			return t
+		}
+		return tl.HeadMs + int64(math.Round(float64(t-tl.HeadMs)/tempo))
+	}
+}
+
+// endsClause reports whether a line stops in the middle of a sentence (it was split at a comma,
+// enumeration comma, semicolon or colon), ignoring closing quotes.
+func endsClause(text string) bool {
+	t := strings.TrimRight(text, " \t\u3000”’」』）)\"'")
+	r, _ := utf8.DecodeLastRuneInString(t)
+	return strings.ContainsRune("，、；：,;:", r)
 }
 
 func intOr(p *int, def int) int {
@@ -425,16 +452,62 @@ func (a *App) renderChapter(ctx context.Context, j *model.Job, jc reporter) erro
 		}
 		return p
 	}
+	// How lines run into each other (fades, music held down through pauses, room tone) and the speed
+	// of the voice. With the settings of books made before 0.1.3 this lays out exactly as before.
+	flow := b.Settings.V.Flow
+	tempo := flow.TempoOf()
+	fade, hold := int64(0), int64(0)
+	if flow.Smooth {
+		fade, hold = int64(max(flow.FadeMs, 0)), int64(max(flow.DuckHoldMs, 0))
+	}
+	edge := func(d int64) int64 { return min(fade, d/4) }
+	at := tempoMap(tl, tempo)
 	var timings []model.SegmentTiming
+	var speech [][2]int64
+	var voiceClips []audio.MixClip
 	for _, d := range tl.Dialogue {
 		if d.Missing || d.AssetID == "" {
 			continue
 		}
-		clips = append(clips, audio.MixClip{Source: pathOf(d.AssetID), StartMs: offset + d.StartMs, DurationMs: d.DurationMs, GainDB: d.VolumeDB, Filter: audio.FilterChain(d.Effects), Voice: true})
-		timings = append(timings, model.SegmentTiming{SegmentID: d.SegmentID, CharacterID: d.CharacterID, StartMs: offset + d.StartMs, EndMs: offset + d.StartMs + d.DurationMs, Text: d.Text})
+		c := audio.MixClip{Source: pathOf(d.AssetID), StartMs: offset + d.StartMs, DurationMs: d.DurationMs, GainDB: d.VolumeDB, Filter: audio.FilterChain(d.Effects), Voice: true, FadeInMs: edge(d.DurationMs), FadeOutMs: edge(d.DurationMs)}
+		start, end := offset+at(d.StartMs), offset+at(d.StartMs+d.DurationMs)
+		timings = append(timings, model.SegmentTiming{SegmentID: d.SegmentID, CharacterID: d.CharacterID, StartMs: start, EndMs: end, Text: d.Text})
+		speech = append(speech, [2]int64{start, end})
+		voiceClips = append(voiceClips, c)
+	}
+	if tempo == 1 {
+		clips = append(clips, voiceClips...)
+	} else if len(voiceClips) > 0 {
+		// assemble the voice alone, change its speed as a whole (pitch kept), then lay it in the mix;
+		// music and effects keep their own speed
+		jc.Progress(0.2, fmt.Sprintf("正在把人声调整为 %.2g 倍速", tempo))
+		for i := range voiceClips {
+			voiceClips[i].StartMs -= offset + tl.HeadMs
+		}
+		raw, sped := filepath.Join(dir, "voice.wav"), filepath.Join(dir, "voice-tempo.wav")
+		if _, err := a.FF.Mix(ctx, voiceClips, raw, audio.MixOptions{TotalMs: tl.SpeechEnd - tl.HeadMs, Speech: [][2]int64{}}); err != nil {
+			a.DB.Model(render).Updates(map[string]any{"status": "failed", "error": truncateStr(err.Error(), 480)})
+			return err
+		}
+		if err := a.FF.Tempo(ctx, raw, sped, tempo); err != nil {
+			a.DB.Model(render).Updates(map[string]any{"status": "failed", "error": truncateStr(err.Error(), 480)})
+			return err
+		}
+		clips = append(clips, audio.MixClip{Source: sped, StartMs: offset + tl.HeadMs})
 	}
 	for _, s := range tl.Sfx {
-		clips = append(clips, audio.MixClip{Source: pathOf(s.AssetID), StartMs: offset + s.StartMs, GainDB: s.VolumeDB, Filter: audio.FilterChain(s.Effects)})
+		clips = append(clips, audio.MixClip{Source: pathOf(s.AssetID), StartMs: offset + at(s.StartMs), GainDB: s.VolumeDB, Filter: audio.FilterChain(s.Effects)})
+	}
+	duration := at(tl.SpeechEnd) + tl.TailMs
+	if tempo == 1 {
+		duration = tl.DurationMs
+	}
+	for _, tr := range tl.Tracks {
+		for _, c := range tr.Resolved {
+			if !c.Fill && tempo != 1 {
+				duration = max(duration, at(c.AbsStartMs)+c.AbsDurMs)
+			}
+		}
 	}
 	for _, tr := range tl.Tracks {
 		if tr.Muted {
@@ -445,17 +518,30 @@ func (a *App) renderChapter(ctx context.Context, j *model.Job, jc reporter) erro
 			if src == "" {
 				continue
 			}
-			clips = append(clips, audio.MixClip{Source: src, StartMs: offset + c.AbsStartMs, OffsetMs: c.OffsetMs, DurationMs: c.AbsDurMs, Loop: c.Loop || c.Fill,
+			start, dur := at(c.AbsStartMs), c.AbsDurMs
+			if c.Fill {
+				dur = duration - start
+			}
+			clips = append(clips, audio.MixClip{Source: src, StartMs: offset + start, OffsetMs: c.OffsetMs, DurationMs: dur, Loop: c.Loop || c.Fill,
 				GainDB: tr.Volume + c.Volume, FadeInMs: c.FadeInMs, FadeOutMs: c.FadeOutMs, Filter: audio.FilterChain(append(append([]string{}, tr.Effects...), c.Effects...)), Duck: tr.Duck})
 		}
 	}
-	total := offset + tl.DurationMs
+	if flow.RoomTone && len(speech) > 0 {
+		tone := filepath.Join(dir, "roomtone.wav")
+		if f, err := os.Create(tone); err == nil {
+			audio.EncodeWAV16(f, audio.RoomTone(12))
+			f.Close()
+			from := max(offset, speech[0][0]-400)
+			clips = append(clips, audio.MixClip{Source: tone, StartMs: from, DurationMs: speech[len(speech)-1][1] + 600 - from, Loop: true, GainDB: -44, FadeInMs: 400, FadeOutMs: 600})
+		}
+	}
+	total := offset + duration
 	if outroPath != "" {
 		clips = append(clips, audio.MixClip{Source: outroPath, StartMs: total})
 		total += outroMs
 	}
 	mixPath := filepath.Join(dir, "mix.wav")
-	if _, err := a.FF.Mix(ctx, clips, mixPath, audio.MixOptions{DuckDB: tl.DuckingDb, TotalMs: total}); err != nil {
+	if _, err := a.FF.Mix(ctx, clips, mixPath, audio.MixOptions{DuckDB: tl.DuckingDb, TotalMs: total, Speech: speech, HoldMs: hold}); err != nil {
 		a.DB.Model(render).Updates(map[string]any{"status": "failed", "error": truncateStr(err.Error(), 480)})
 		return err
 	}
@@ -500,6 +586,7 @@ func (a *App) renderChapter(ctx context.Context, j *model.Job, jc reporter) erro
 		}
 	}
 	report := a.techReport(ctx, outPath, preset, hasBed || introPath != "" || outroPath != "")
+	report["tempo"], report["smooth"], report["roomTone"] = tempo, flow.Smooth, flow.RoomTone
 	asset, err := a.SaveAssetFile(ctx, AssetInput{StudioID: b.StudioID, Kind: model.AssetRender, Name: fmt.Sprintf("%s · %s", b.Title, ch.Title), Ext: ext, Origin: "generated", CreatedBy: j.CreatedBy, Meta: map[string]any{"chapterId": ch.ID}}, outPath)
 	if err != nil {
 		return err

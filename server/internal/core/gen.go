@@ -198,7 +198,7 @@ func (a *App) jobGenerate(kind string) jobs.Handler {
 				jc.Progress(float64(i)/float64(count), fmt.Sprintf("正在生成第 %d/%d 个候选", i+1, count))
 				f, err := p.GenerateSFX(ctx, gen.SFXRequest{Prompt: prompt, DurationMs: dur + i*700, Seed: fmt.Sprint(j.ID, i)})
 				if err != nil {
-					return jobs.Permanent(err)
+					return jobs.Permanent(withDetail("音效生成失败", err))
 				}
 				label := sfxKindNames[fmt.Sprint(f.Meta["kind"])]
 				if err := save(f, fmt.Sprintf("%s %d", clip(prompt, 16), i+1), model.AssetSFX, []string{"AI 生成", label}, f.Meta); err != nil {
@@ -296,7 +296,7 @@ func (a *App) jobGenerate(kind string) jobs.Handler {
 				r.Seed = fmt.Sprint(j.ID, i)
 				f, err := p.GenerateMusic(ctx, r)
 				if err != nil {
-					return jobs.Permanent(err)
+					return jobs.Permanent(withDetail("配乐生成失败", err))
 				}
 				mood := moodNames[fmt.Sprint(f.Meta["mood"])]
 				if err := save(f, clip(prompt, 20), model.AssetBGM, []string{"AI 生成", mood, "可循环"}, f.Meta); err != nil {
@@ -344,7 +344,7 @@ func (a *App) jobGenerate(kind string) jobs.Handler {
 			files, err := p.GenerateImage(ctx, gen.ImageRequest{Prompt: brief, Aspect: "1:1", Width: 1200, Height: 1200, Count: count, Seed: j.ID, User: endUserID(j.CreatedBy)})
 			a.noteCall(acc.ID, time.Since(start), err)
 			if err != nil {
-				return jobs.Permanent(err)
+				return jobs.Permanent(withDetail("图片生成失败", fmt.Errorf("账号「%s」：%w", acc.Name, err)))
 			}
 			for i := range files {
 				name, tags := fmt.Sprintf("%s %d", clip(prompt, 16), i+1), []string{"AI 生成"}

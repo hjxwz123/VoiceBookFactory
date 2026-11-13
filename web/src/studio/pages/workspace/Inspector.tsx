@@ -11,6 +11,7 @@ import { can, invalidate } from '../../hooks'
 import { deleteSegments, moveBy, patchSegments, refetchScript, useWS } from './store'
 import { ALT, MOD } from './ScriptList'
 import { CueEditor, segmentCues } from '@/components/cues'
+import { ModelBadge, Voice, VoicePicker, VoicePlay } from '@/components/voice'
 
 export default function Inspector({ book, chapterId, segs, chars }: { book: any; chapterId: string; segs: any[]; chars: Map<string, any> }) {
   const focus = useWS((s) => s.focus)
@@ -112,6 +113,8 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
         )}
       </div>
 
+      {s.type !== 'sfx' && s.type !== 'pause' && <LineVoice s={s} char={char} editable={editable} patch={patch} />}
+
       <Section
         title="音频"
         actions={genOK && s.type !== 'sfx' && <Button size="xs" icon={<RefreshCw className="size-3.5" />} loading={regen || s.audioStatus === 'generating'} onClick={regenerate}>{s.take ? '重新生成' : '生成'}</Button>}
@@ -204,6 +207,33 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
       </Section>
       <IssueDialog open={issue} onOpenChange={setIssue} book={book} chapterId={chapterId} s={s} />
     </div>
+  )
+}
+
+// LineVoice lets one line be spoken in another voice than its character's, for this line only (a
+// disguised voice, someone imitating another, a phone call). The character keeps its voice.
+function LineVoice({ s, char, editable, patch }: { s: any; char: any; editable: boolean; patch: (p: Record<string, any>) => Promise<unknown> | void }) {
+  const [pick, setPick] = useState(false)
+  const own = useQuery<Voice>({ queryKey: ['voice', s.voiceId], queryFn: () => api.get(`/voices/${s.voiceId}`), enabled: !!s.voiceId })
+  const v: Voice | undefined = s.voiceId ? own.data : char?.voice
+  const set = async (voiceId: string) => {
+    setPick(false)
+    await patch({ voiceId })
+    toast.success(voiceId ? '这一句改用新的声音' : '这一句改回角色的声音', { description: s.selectedTakeId ? '重新生成这一句后生效。其他句子和角色的声音都不变。' : '生成这一句时使用。其他句子和角色的声音都不变。' })
+  }
+  return (
+    <Section title="这句的声音" actions={editable && s.voiceId && <Button size="xs" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => set('')}>改回角色声音</Button>}>
+      <div className="flex items-center gap-2 rounded-[10px] bg-sunken/60 px-3 py-2">
+        {v ? <VoicePlay v={v} size="xs" /> : null}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+          {v ? <>{v.name}<ModelBadge v={v} /></> : <span className="text-warn">角色还没有选择声音</span>}
+          {s.voiceId ? <Badge tone="accent">仅这一句</Badge> : <span className="truncate text-xs text-faint">跟随角色「{char?.name ?? '未指定'}」</span>}
+        </span>
+        {editable && <Button size="xs" onClick={() => setPick(true)}>{s.voiceId ? '更换' : '临时换声音'}</Button>}
+      </div>
+      {!s.voiceId && editable && <p className="mt-2 text-xs text-faint">想让这一句换个声音（比如伪装声、模仿别人、电话里的声音），可以只改这一句，角色的声音和其他句子都不受影响。</p>}
+      <VoicePicker open={pick} onOpenChange={setPick} title="这一句用哪个声音" current={s.voiceId || char?.voiceId} gender={char?.gender} onPick={(nv: Voice) => set(nv.id && nv.id !== char?.voiceId ? nv.id : '')} />
+    </Section>
   )
 }
 

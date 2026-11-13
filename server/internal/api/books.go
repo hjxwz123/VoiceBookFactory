@@ -282,7 +282,7 @@ func (s *Server) bookRoutes(r chi.Router) {
 				}
 				old := x.Book.Settings.V
 				up["settings"] = model.JSON[model.BookSettings]{V: *in.Settings}
-				if old.Pause != in.Settings.Pause || old.MonologueReverb != in.Settings.MonologueReverb || old.IntroTemplateID != in.Settings.IntroTemplateID || old.OutroTemplateID != in.Settings.OutroTemplateID || old.LoudnessPreset != in.Settings.LoudnessPreset {
+				if old.Pause != in.Settings.Pause || old.Flow != in.Settings.Flow || old.DuckingDb != in.Settings.DuckingDb || old.MonologueReverb != in.Settings.MonologueReverb || old.IntroTemplateID != in.Settings.IntroTemplateID || old.OutroTemplateID != in.Settings.OutroTemplateID || old.LoudnessPreset != in.Settings.LoudnessPreset {
 					s.app.DB.Model(&model.Chapter{}).Where("book_id = ? AND render_id <> ''", x.Book.ID).Update("render_stale", true)
 				}
 				s.app.ApplyBookTemplates(x.Book.ID, old, *in.Settings)

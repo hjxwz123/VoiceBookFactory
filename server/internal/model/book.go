@@ -35,21 +35,22 @@ type Copyright struct {
 }
 
 type BookSettings struct {
-	QualityTier      string     `json:"qualityTier"`
-	Pause            PauseRules `json:"pause"`
-	LoudnessPreset   string     `json:"loudnessPreset"`
-	IntroTemplateID  string     `json:"introTemplateId"`
-	OutroTemplateID  string     `json:"outroTemplateId"`
-	AILabel          bool       `json:"aiLabel"`
-	SpeechRate       int        `json:"speechRate"`
-	RemoveSpeechTags bool       `json:"removeSpeechTags"`
-	MonologueReverb  bool       `json:"monologueReverb"`
-	DuckingDb        float64    `json:"duckingDb"`
-	AutoQC           bool       `json:"autoQc"`
-	ProductionMode   bool       `json:"productionMode"`
-	ExportFormat     string     `json:"exportFormat"`
-	ExportBitrate    int        `json:"exportBitrate"`
-	NamingRule       string     `json:"namingRule"`
+	QualityTier      string       `json:"qualityTier"`
+	Pause            PauseRules   `json:"pause"`
+	Flow             FlowSettings `json:"flow"`
+	LoudnessPreset   string       `json:"loudnessPreset"`
+	IntroTemplateID  string       `json:"introTemplateId"`
+	OutroTemplateID  string       `json:"outroTemplateId"`
+	AILabel          bool         `json:"aiLabel"`
+	SpeechRate       int          `json:"speechRate"`
+	RemoveSpeechTags bool         `json:"removeSpeechTags"`
+	MonologueReverb  bool         `json:"monologueReverb"`
+	DuckingDb        float64      `json:"duckingDb"`
+	AutoQC           bool         `json:"autoQc"`
+	ProductionMode   bool         `json:"productionMode"`
+	ExportFormat     string       `json:"exportFormat"`
+	ExportBitrate    int          `json:"exportBitrate"`
+	NamingRule       string       `json:"namingRule"`
 }
 
 type WorkflowStage struct {
@@ -241,6 +242,7 @@ type Segment struct {
 	SceneBreak     bool                  `json:"sceneBreak"`
 	Type           string                `gorm:"size:16" json:"type"`
 	CharacterID    string                `gorm:"size:36;index" json:"characterId"`
+	VoiceID        string                `gorm:"size:36" json:"voiceId"` // a voice for this line only; empty = the character's
 	Text           string                `gorm:"type:text" json:"text"`
 	Removed        bool                  `json:"removed"` // speech tags dropped in drama mode (kept for fidelity)
 	Emotion        string                `gorm:"size:16" json:"emotion"`

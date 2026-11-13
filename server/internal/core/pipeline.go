@@ -474,7 +474,7 @@ func (a *App) jobPipeline(ctx context.Context, jc *jobs.Context) error {
 		return context.Canceled
 	case err != nil:
 		r.save(true, map[string]any{"status": "failed", "finished_at": &t, "error": truncateStr(err.Error(), 900), "used_credits": used.CreditsUsed})
-		a.FireWebhook(b.StudioID, "pipeline.failed", map[string]any{"runId": run.ID, "bookId": b.ID, "error": err.Error()})
+		a.FireWebhook(b.StudioID, "pipeline.failed", map[string]any{"runId": run.ID, "bookId": b.ID, "error": PublicText(err.Error())})
 		return jobs.Permanent(err)
 	}
 	r.save(true, map[string]any{"status": "completed", "finished_at": &t, "progress": 1, "used_credits": used.CreditsUsed, "stage": "done"})

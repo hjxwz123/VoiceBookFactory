@@ -110,7 +110,7 @@ func (a *App) CallLLM(ctx context.Context, h *LLMHandle, req llm.Request, out an
 	resp, err := llm.ChatJSON(ctx, h.Client, req, out)
 	a.noteCall(h.Account.ID, time.Since(start), err)
 	if err != nil {
-		return nil, fmt.Errorf("大模型调用失败（%s）：%w", h.Account.Name, err)
+		return nil, withDetail("大模型调用失败", fmt.Errorf("账号「%s」：%w", h.Account.Name, err))
 	}
 	return resp, nil
 }

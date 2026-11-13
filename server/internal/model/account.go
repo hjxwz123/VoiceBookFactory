@@ -109,16 +109,60 @@ const (
 )
 
 type PauseRules struct {
-	SameSpeakerMs   int `json:"sameSpeakerMs"`
+	SameSpeakerMs   int `json:"sameSpeakerMs"` // between two sentences of the same speaker
 	SpeakerChangeMs int `json:"speakerChangeMs"`
 	ParagraphMs     int `json:"paragraphMs"`
 	SceneMs         int `json:"sceneMs"`
 	ChapterHeadMs   int `json:"chapterHeadMs"`
 	ChapterTailMs   int `json:"chapterTailMs"`
+	// ClauseMs is the pause where a long sentence was split at a comma (the line ends in ，、；：).
+	// 0 (books made before 0.1.3) uses SameSpeakerMs there, as before.
+	ClauseMs int `json:"clauseMs"`
 }
 
+// DefaultPauseRules is the rhythm new books start with: a short breath at commas, a full stop
+// between sentences, a little more when someone else speaks.
 func DefaultPauseRules() PauseRules {
+	return PauseRules{ClauseMs: 250, SameSpeakerMs: 550, SpeakerChangeMs: 700, ParagraphMs: 1000, SceneMs: 1800, ChapterHeadMs: 1000, ChapterTailMs: 2000}
+}
+
+// LegacyPauseRules is what books used before 0.1.3. Books that stored no rules keep it, so their
+// chapters sound the same when rendered again.
+func LegacyPauseRules() PauseRules {
 	return PauseRules{SameSpeakerMs: 300, SpeakerChangeMs: 500, ParagraphMs: 800, SceneMs: 1500, ChapterHeadMs: 1000, ChapterTailMs: 2000}
+}
+
+// FlowSettings shape how lines run into each other when a chapter is rendered. They act at render
+// time only: scripts and line audio are never changed.
+type FlowSettings struct {
+	// Smooth fades the edges of each line and keeps the music down through short pauses instead of
+	// letting it swell between sentences. Off for books made before 0.1.3, which sound as they did.
+	Smooth     bool `json:"smooth"`
+	FadeMs     int  `json:"fadeMs"`     // edge fade on each line
+	DuckHoldMs int  `json:"duckHoldMs"` // music stays down through pauses shorter than this
+	// RoomTone lays a faint, even noise under the speech so pauses are not dead digital silence.
+	RoomTone bool `json:"roomTone"`
+	// Tempo speeds the assembled voice track up or down (pitch kept) before music and effects are
+	// mixed in; 0 or 1 leaves it as recorded.
+	Tempo float64 `json:"tempo"`
+}
+
+func DefaultFlow() FlowSettings {
+	return FlowSettings{Smooth: true, FadeMs: 30, DuckHoldMs: 1500, Tempo: 1}
+}
+
+// Tempo limits for FlowSettings.Tempo.
+const (
+	MinTempo = 0.7
+	MaxTempo = 1.5
+)
+
+// TempoOf returns the effective voice speed of a flow setting.
+func (f FlowSettings) TempoOf() float64 {
+	if f.Tempo <= 0 {
+		return 1
+	}
+	return min(max(f.Tempo, MinTempo), MaxTempo)
 }
 
 type StudioSettings struct {

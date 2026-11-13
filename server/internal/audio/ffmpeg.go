@@ -36,7 +36,7 @@ func (f *FF) run(ctx context.Context, args ...string) ([]byte, error) {
 		if len(msg) > 800 {
 			msg = msg[len(msg)-800:]
 		}
-		return nil, fmt.Errorf("ffmpeg 处理失败：%v %s", err, strings.TrimSpace(msg))
+		return nil, fmt.Errorf("音频处理失败｜详情：ffmpeg：%v %s", err, strings.TrimSpace(msg)) // core.DetailSep
 	}
 	return append(out, stderr.Bytes()...), nil
 }
@@ -108,7 +108,7 @@ func (f *FF) DecodePCM(ctx context.Context, path string, rate, ch int, filter st
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("音频解码失败：%v %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("音频解码失败｜详情：%v %s", err, strings.TrimSpace(stderr.String())) // core.DetailSep
 	}
 	n := len(out) / 4
 	p := &PCM{Rate: rate, Channels: ch, Data: make([]float32, n)}
@@ -116,6 +116,11 @@ func (f *FF) DecodePCM(ctx context.Context, path string, rate, ch int, filter st
 		p.Data[i] = math.Float32frombits(binary.LittleEndian.Uint32(out[i*4:]))
 	}
 	return p, nil
+}
+
+// Tempo changes the speed of a recording without changing its pitch (factor 1.2 = 20% faster).
+func (f *FF) Tempo(ctx context.Context, in, out string, factor float64) error {
+	return f.ToWAV(ctx, in, out, SampleRate, 2, fmt.Sprintf("atempo=%.4f", factor))
 }
 
 // ToWAV converts to 16-bit PCM WAV at the given rate/channels with an optional filter.

@@ -308,8 +308,12 @@ func (a *App) defaultBookSettings(studioID, tier string) model.BookSettings {
 	if ss.Pause.SameSpeakerMs == 0 {
 		ss = model.DefaultStudioSettings()
 	}
+	pause := ss.Pause
+	if pause == model.LegacyPauseRules() { // the old defaults, never changed by the studio
+		pause = model.DefaultPauseRules()
+	}
 	return model.BookSettings{
-		QualityTier: tier, Pause: ss.Pause, LoudnessPreset: ss.DefaultPreset, IntroTemplateID: ss.IntroTemplateID, OutroTemplateID: ss.OutroTemplateID,
+		QualityTier: tier, Pause: pause, Flow: model.DefaultFlow(), LoudnessPreset: ss.DefaultPreset, IntroTemplateID: ss.IntroTemplateID, OutroTemplateID: ss.OutroTemplateID,
 		SpeechRate: ss.SpeechRate, MonologueReverb: ss.MonologueReverb, DuckingDb: ss.DuckingDb, AutoQC: ss.AutoQC, ProductionMode: ss.ProductionMode,
 		ExportFormat: ss.DefaultFormat, ExportBitrate: ss.DefaultBitrate, NamingRule: "{index}_{title}",
 	}

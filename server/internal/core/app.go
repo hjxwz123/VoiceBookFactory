@@ -163,7 +163,7 @@ func (a *App) onJobFinish(j *model.Job) {
 			a.Notify(j.CreatedBy, j.StudioID, "job_done", title+" 已完成", j.ProgressText, link)
 		}
 	case model.JobFailed:
-		a.Notify(j.CreatedBy, j.StudioID, "job_failed", title+" 失败", j.Error, link)
+		a.Notify(j.CreatedBy, j.StudioID, "job_failed", title+" 失败", PublicText(j.Error), link)
 	}
 	slog.Info("job finished", "type", j.Type, "id", j.ID, "status", j.Status)
 }

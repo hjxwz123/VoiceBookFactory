@@ -71,6 +71,26 @@ type MixClip struct {
 type MixOptions struct {
 	DuckDB  float64
 	TotalMs int64
+	// Speech lists when someone is speaking ([start, end] in ms) for ducking. Nil derives it from the
+	// clips marked Voice.
+	Speech [][2]int64
+	// HoldMs keeps ducked music down through pauses shorter than this, so it does not swell between
+	// sentences. 0 lets it rise in every pause.
+	HoldMs int64
+}
+
+// SpeechSpans sorts speaking intervals and bridges pauses shorter than hold.
+func SpeechSpans(spans [][2]int, hold int) [][2]int {
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	var out [][2]int
+	for _, s := range spans {
+		if n := len(out); n > 0 && s[0]-out[n-1][1] < hold {
+			out[n-1][1] = max(out[n-1][1], s[1])
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 type loadedSource struct {
@@ -127,11 +147,18 @@ func (f *FF) Mix(ctx context.Context, clips []MixClip, out string, opt MixOption
 		}
 	}
 	var voice [][2]int
-	for _, p := range list {
-		if p.Voice {
-			voice = append(voice, [2]int{p.start, p.end})
+	if opt.Speech != nil {
+		for _, sp := range opt.Speech {
+			voice = append(voice, [2]int{int(sp[0] * rate / 1000), int(sp[1] * rate / 1000)})
+		}
+	} else {
+		for _, p := range list {
+			if p.Voice {
+				voice = append(voice, [2]int{p.start, p.end})
+			}
 		}
 	}
+	voice = SpeechSpans(voice, int(opt.HoldMs*rate/1000))
 	w, err := CreateStreamWAV(out, rate, 2)
 	if err != nil {
 		return 0, err
@@ -261,6 +288,46 @@ func (f *FF) Mix(ctx context.Context, clips []MixClip, out string, opt MixOption
 		return 0, err
 	}
 	return int64(totalFrames) * 1000 / rate, nil
+}
+
+// RoomTone is a faint, even, darkened noise (a quiet room) used under speech so that the pauses
+// between lines are not dead digital silence. It is meant to be looped.
+func RoomTone(seconds int) *PCM {
+	n := seconds * SampleRate
+	p := &PCM{Rate: SampleRate, Channels: 2, Data: make([]float32, n*2)}
+	var seed uint32 = 0x9e3779b9
+	var l1, l2, r1, r2 float64
+	for i := 0; i < n; i++ {
+		for c := 0; c < 2; c++ {
+			seed ^= seed << 13
+			seed ^= seed >> 17
+			seed ^= seed << 5
+			w := float64(seed)/float64(math.MaxUint32)*2 - 1
+			// two one-pole low-passes: soft, without hiss
+			if c == 0 {
+				l1 += 0.08 * (w - l1)
+				l2 += 0.08 * (l1 - l2)
+				p.Data[i*2] = float32(l2 * 3)
+			} else {
+				r1 += 0.08 * (w - r1)
+				r2 += 0.08 * (r1 - r2)
+				p.Data[i*2+1] = float32(r2 * 3)
+			}
+		}
+	}
+	// level it to about -20 dBFS RMS; the mixer sets the final gain
+	NormalizeRMS(p, -20, -6)
+	// cross-fade the ends so the loop has no seam
+	fade := SampleRate / 2
+	for i := 0; i < fade; i++ {
+		a := float32(i) / float32(fade)
+		for c := 0; c < 2; c++ {
+			head, tail := i*2+c, (n-fade+i)*2+c
+			p.Data[head] = p.Data[head]*a + p.Data[tail]*(1-a)
+		}
+	}
+	p.Data = p.Data[:(n-fade)*2]
+	return p
 }
 
 func softClip(x float32) float32 {

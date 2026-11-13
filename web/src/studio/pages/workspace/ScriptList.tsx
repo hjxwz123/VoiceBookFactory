@@ -1,6 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, ArrowDown, ArrowUp, Combine, Copy, Drama, Flag, GripVertical, Lock, MessageSquare, MoreHorizontal, Pencil, Plus, RefreshCw, Scissors, Trash2, X } from '@/components/icons'
+import { AlertTriangle, ArrowDown, ArrowUp, AudioLines, Combine, Copy, Drama, Flag, GripVertical, Lock, MessageSquare, MoreHorizontal, Pencil, Plus, RefreshCw, Scissors, Trash2, X } from '@/components/icons'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -377,6 +377,7 @@ const Row = memo(function Row({ s, index, char, chars, active, selected, order, 
           </button>
         </Tip>
         {s.locked && <Tip label="已锁定，不会被批量重新生成"><Lock className="mt-2 size-3 text-faint" /></Tip>}
+        {s.voiceId && <Tip label="这一句单独换了声音"><AudioLines className="mt-2 size-3 text-accent" /></Tip>}
         {s.pending ? (
           <Tip label="正在保存"><span className="grid size-7 place-items-center"><Spinner className="size-3.5" /></span></Tip>
         ) : (

@@ -234,7 +234,47 @@ export function System() {
           </tbody>
         </Table>
       </Panel>
+      <ErrorLogPanel />
     </div>
+  )
+}
+
+// Errors users were shown only in plain words, with the full message. Users quote the reference
+// (编号) from the message they saw. Background jobs keep their full error in 任务队列.
+function ErrorLogPanel() {
+  const [ref, setRef] = useState('')
+  const [page, setPage] = useState(1)
+  const [open, setOpen] = useState<any>(null)
+  const { data } = useAdmin<any>('/errors', { ref, page, pageSize: 20 }, { refetch: 15000 })
+  return (
+    <Panel title="最近的报错" description="用户只会看到通俗的提示和一个编号，完整原因记在这里。后台任务的完整报错在「任务队列」里。" padded={false} actions={<Input value={ref} onChange={(e) => { setRef(e.target.value); setPage(1) }} placeholder="按编号查找" className="!h-8 w-40 font-mono text-xs" />}>
+      {!data?.items?.length ? <Empty title={ref ? '没有这个编号' : '还没有报错'} /> : (
+        <Table>
+          <thead><tr><th>编号</th><th>时间</th><th>请求</th><th>用户看到的</th><th>原因</th></tr></thead>
+          <tbody>
+            {data.items.map((e: any) => (
+              <tr key={e.id} className="cursor-pointer" onClick={() => setOpen(e)}>
+                <td className="font-mono text-xs">{e.ref}</td>
+                <td className="whitespace-nowrap text-xs text-faint">{fromNow(e.createdAt)}</td>
+                <td className="max-w-48 truncate font-mono text-xs text-muted">{e.method} {e.path}</td>
+                <td className="max-w-56 truncate text-[13px]">{e.message}</td>
+                <td className="max-w-72 truncate font-mono text-xs text-danger">{e.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      {data && data.total > data.pageSize && <div className="px-5 pb-4"><Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></div>}
+      <Sheet open={!!open} onOpenChange={(o) => !o && setOpen(null)} title={open ? `报错 ${open.ref}` : ''} description={open && `${open.method} ${open.path} · ${dateTime(open.createdAt)}`} width={600}>
+        {open && (
+          <div className="space-y-4 text-[13px]">
+            <div><div className="mb-1 text-xs text-muted">用户看到的</div><p>{open.message}</p></div>
+            <div><div className="mb-1 text-xs text-muted">完整原因</div><pre className="whitespace-pre-wrap rounded-md bg-danger-soft p-3 text-xs text-danger">{open.detail}</pre></div>
+            <div className="text-xs text-muted">用户 <span className="font-mono">{open.userId || '未登录'}</span> · 状态码 {open.status}</div>
+          </div>
+        )}
+      </Sheet>
+    </Panel>
   )
 }
 

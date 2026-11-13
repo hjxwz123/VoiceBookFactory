@@ -164,6 +164,22 @@ func (a *App) resolveVoice(c *model.Character, studioID string) (*voiceChoice, e
 	return nil, Bad("角色「%s」还没有选择音色", c.Name)
 }
 
+// segmentVoice is the voice a line is spoken in: its own voice when one was set for it in the
+// script editor, otherwise its character's.
+func (a *App) segmentVoice(s *model.Segment, c *model.Character, studioID string) (*voiceChoice, error) {
+	if s.VoiceID != "" {
+		var v model.Voice
+		if err := a.DB.First(&v, "id = ?", s.VoiceID).Error; err != nil {
+			return nil, Bad("这句单独设置的音色已被删除，请在制作台重新选择")
+		}
+		if v.Status != model.VoiceReady {
+			return nil, Bad("这句单独设置的音色「%s」当前不可用", v.Name)
+		}
+		return &voiceChoice{Voice: &v}, nil
+	}
+	return a.resolveVoice(c, studioID)
+}
+
 func segHash(s *model.Segment, vc *voiceChoice) string {
 	prons, _ := json.Marshal(s.Prons.V)
 	speed := f64(s.Speed, f64(vc.Params.Speed, vc.Voice.Defaults.V.Speed))
@@ -184,7 +200,7 @@ func (a *App) synthesizeSegment(ctx context.Context, b *model.Book, s *model.Seg
 	if c == nil {
 		return nil, Bad("片段未指定角色，请先在画本中选择说话人")
 	}
-	vc, err := a.resolveVoice(c, b.StudioID)
+	vc, err := a.segmentVoice(s, c, b.StudioID)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +267,7 @@ func (a *App) synthesizeSegment(ctx context.Context, b *model.Book, s *model.Seg
 	})
 	if err != nil {
 		a.DB.Model(acc).Update("failures", gorm.Expr("failures + 1"))
-		return nil, err
+		return nil, withDetail("配音失败", fmt.Errorf("账号「%s」：%w", acc.Name, err))
 	}
 	a.voiceUsed(vc.Voice, provider)
 	asset, dur, err := a.storeSpeech(ctx, b.StudioID, userID, audioOut, "take", map[string]any{"segmentId": s.ID})
@@ -454,7 +470,7 @@ func (a *App) EstimateGeneration(x *Access, chapterIDs []string, req GenerateReq
 			chars += n
 			tier := ""
 			if c := cmap[s.CharacterID]; c != nil {
-				if vc, err := a.resolveVoice(c, x.StudioID); err == nil {
+				if vc, err := a.segmentVoice(&s, c, x.StudioID); err == nil {
 					tier = vc.Voice.PriceTier
 					providers[vc.Voice.Provider] += n
 				}
@@ -568,7 +584,7 @@ func (a *App) ttsSegments(ctx context.Context, j *model.Job, jc reporter, skipHo
 	for _, s := range segs {
 		tier := ""
 		if c := chars[s.CharacterID]; c != nil {
-			if vc, err := a.resolveVoice(c, b.StudioID); err == nil {
+			if vc, err := a.segmentVoice(&s, c, b.StudioID); err == nil {
 				tier = vc.Voice.PriceTier
 			}
 		}
@@ -625,7 +641,7 @@ func (a *App) ttsSegments(ctx context.Context, j *model.Job, jc reporter, skipHo
 			// per-account concurrency limit
 			var lim chan struct{}
 			if c := chars[s.CharacterID]; c != nil {
-				if vc, err := a.resolveVoice(c, b.StudioID); err == nil {
+				if vc, err := a.segmentVoice(&s, c, b.StudioID); err == nil {
 					var acc model.ProviderAccount
 					if a.DB.Select("id", "concurrency").First(&acc, "id = ? OR (provider = ? AND kind = ?)", vc.Voice.ProviderAccountID, vc.Voice.Provider, model.KindTTS).Error == nil {
 						lim = a.Q.Limiter("tts:"+acc.ID, acc.Concurrency)
@@ -793,7 +809,7 @@ func (a *App) Preview(ctx context.Context, x *Access, v *model.Voice, txt, emoti
 	out, err := provider.Synthesize(ctx, tts.SynthesizeRequest{Text: ttsText, ProviderVoiceID: v.ProviderVoiceID, Model: v.Model, Emotion: emotion, Speed: speed, Pitch: pitch, Prons: prons,
 		VoiceGender: v.Gender, VoiceAge: v.AgeGroup, VoiceSeed: v.ID, Intensity: 2})
 	if err != nil {
-		return "", err
+		return "", withDetail("试听生成失败", err)
 	}
 	a.voiceUsed(v, provider)
 	asset, _, err := a.storeSpeech(ctx, x.StudioID, x.User.ID, out, model.AssetPreview, map[string]any{"voiceId": v.ID})

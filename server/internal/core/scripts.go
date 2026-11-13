@@ -385,8 +385,11 @@ func (a *App) saveNewScript(ch *model.Chapter, segs []model.Segment, origin, use
 					*s = *old
 					s.ID, s.Seq, s.Para, s.SceneBreak = "", keepSeq, keepPara, keepScene
 					s.ScriptID, s.ChapterID, s.BookID = script.ID, ch.ID, ch.BookID
-				} else if old.CharacterID == s.CharacterID && old.SelectedTakeID != "" {
-					s.SelectedTakeID, s.AudioStatus, s.ContentHash, s.RecordStatus = old.SelectedTakeID, old.AudioStatus, old.ContentHash, old.RecordStatus
+				} else if old.CharacterID == s.CharacterID {
+					s.VoiceID = old.VoiceID // a voice set for this line stays with it
+					if old.SelectedTakeID != "" {
+						s.SelectedTakeID, s.AudioStatus, s.ContentHash, s.RecordStatus = old.SelectedTakeID, old.AudioStatus, old.ContentHash, old.RecordStatus
+					}
 				}
 				oldSegID = old.ID
 			}
@@ -642,6 +645,7 @@ func (a *App) saveSyncedScript(ch *model.Chapter, segs []model.Segment, userID, 
 type SegmentPatch struct {
 	Text          *string                `json:"text"`
 	CharacterID   *string                `json:"characterId"`
+	VoiceID       *string                `json:"voiceId"` // a voice for these lines only; "" goes back to the character's
 	Type          *string                `json:"type"`
 	Emotion       *string                `json:"emotion"`
 	Intensity     *int                   `json:"intensity"`
@@ -664,9 +668,22 @@ type SegmentPatch struct {
 	Note          *string                `json:"note"`
 }
 
+// lineVoiceOK checks a voice chosen for one line, by the rules for a character's voice: ready, the
+// studio's own or shared with it, and allowed by the studio's plan.
+func (a *App) lineVoiceOK(x *Access, voiceID string) error {
+	var v model.Voice
+	if a.DB.First(&v, "id = ?", voiceID).Error != nil || v.Status != model.VoiceReady {
+		return Bad("这个音色当前不可用，请换一个")
+	}
+	if v.Scope != model.ScopeSystem && v.StudioID != x.StudioID && !v.Listed {
+		return Bad("这个音色不能在这本书里使用")
+	}
+	return a.checkPremiumVoice(x.StudioID, &v)
+}
+
 // audioAffecting reports whether the patch changes how the line sounds.
 func (p SegmentPatch) audioAffecting() bool {
-	return p.Text != nil || p.CharacterID != nil || p.Emotion != nil || p.Intensity != nil || p.Tags != nil || p.Speed != nil ||
+	return p.Text != nil || p.CharacterID != nil || p.VoiceID != nil || p.Emotion != nil || p.Intensity != nil || p.Tags != nil || p.Speed != nil ||
 		p.Pitch != nil || p.Instruction != nil || p.Prons != nil || p.Cues != nil || p.ClearProsody
 }
 
@@ -675,7 +692,7 @@ func (a *App) UpdateSegments(x *Access, ids []string, p SegmentPatch) ([]model.S
 		return nil, Bad("没有选择片段")
 	}
 	// permission: script editors can change anything; post can change pauses/effects/volume; voice-only can't edit
-	scriptFields := p.Text != nil || p.CharacterID != nil || p.Type != nil || p.Emotion != nil || p.Intensity != nil || p.Tags != nil || p.Instruction != nil || p.Prons != nil || p.Cues != nil || p.Removed != nil || p.Locked != nil || p.NeedsReview != nil
+	scriptFields := p.Text != nil || p.CharacterID != nil || p.VoiceID != nil || p.Type != nil || p.Emotion != nil || p.Intensity != nil || p.Tags != nil || p.Instruction != nil || p.Prons != nil || p.Cues != nil || p.Removed != nil || p.Locked != nil || p.NeedsReview != nil
 	if scriptFields {
 		if err := need(x, PermScript); err != nil {
 			return nil, err
@@ -694,7 +711,15 @@ func (a *App) UpdateSegments(x *Access, ids []string, p SegmentPatch) ([]model.S
 			return nil, Bad("角色不存在")
 		}
 	}
+	if p.VoiceID != nil && *p.VoiceID != "" {
+		if err := a.lineVoiceOK(x, *p.VoiceID); err != nil {
+			return nil, err
+		}
+	}
 	up := map[string]any{}
+	if p.VoiceID != nil {
+		up["voice_id"] = *p.VoiceID
+	}
 	if p.Text != nil {
 		t := *p.Text
 		if strings.TrimSpace(t) == "" {
@@ -1485,7 +1510,7 @@ func (a *App) SegmentViews(segs []model.Segment) []map[string]any {
 			"type": s.Type, "characterId": s.CharacterID, "text": s.Text, "removed": s.Removed, "emotion": s.Emotion, "intensity": s.Intensity,
 			"tags": s.Tags.V, "speed": s.Speed, "volume": s.Volume, "pitch": s.Pitch, "pauseBeforeMs": s.PauseBeforeMs, "pauseAfterMs": s.PauseAfterMs,
 			"instruction": s.Instruction, "prons": s.Prons.V, "cues": nonNilCues(s.Cues.V), "effects": s.Effects.V, "sfxAssetId": s.SfxAssetID, "confidence": s.Confidence,
-			"needsReview": s.NeedsReview, "locked": s.Locked, "selectedTakeId": s.SelectedTakeID, "audioStatus": s.AudioStatus,
+			"needsReview": s.NeedsReview, "locked": s.Locked, "selectedTakeId": s.SelectedTakeID, "audioStatus": s.AudioStatus, "voiceId": s.VoiceID,
 			"recordStatus": s.RecordStatus, "qc": s.QC, "qcNote": s.QCNote, "lastError": s.LastError, "note": s.Note, "modified": s.Modified,
 			"freeRegens": s.FreeRegens,
 		}

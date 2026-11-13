@@ -372,7 +372,8 @@ func (a *App) SetCharacterVoice(x *Access, c *model.Character, voiceID string) (
 	if err := a.DB.Model(c).Updates(map[string]any{"voice_id": voiceID, "mode": "ai"}).Error; err != nil {
 		return 0, err
 	}
-	res := a.DB.Model(&model.Segment{}).Where("character_id = ? AND audio_status = ? AND locked = ?", c.ID, model.AudioReady, false).
+	// lines given a voice of their own in the script editor keep it
+	res := a.DB.Model(&model.Segment{}).Where("character_id = ? AND audio_status = ? AND locked = ? AND voice_id = ''", c.ID, model.AudioReady, false).
 		Where("selected_take_id IN (?)", a.DB.Model(&model.Take{}).Select("id").Where("origin = ?", model.TakeTTS)).
 		Update("audio_status", model.AudioStale)
 	a.DB.Model(&model.Chapter{}).Where("book_id = ? AND render_id <> ''", c.BookID).Update("render_stale", true)
@@ -383,9 +384,9 @@ func (a *App) SetCharacterVoice(x *Access, c *model.Character, voiceID string) (
 // AffectedByRecast counts generated lines that a voice change would invalidate (for the confirm dialog).
 func (a *App) AffectedByRecast(c *model.Character) (int64, int64) {
 	var n int64
-	a.DB.Model(&model.Segment{}).Where("character_id = ? AND audio_status = ?", c.ID, model.AudioReady).Count(&n)
+	a.DB.Model(&model.Segment{}).Where("character_id = ? AND audio_status = ? AND voice_id = ''", c.ID, model.AudioReady).Count(&n)
 	var chars int64
-	a.DB.Model(&model.Segment{}).Where("character_id = ?", c.ID).Select("COALESCE(SUM(LENGTH(text)),0)").Scan(&chars)
+	a.DB.Model(&model.Segment{}).Where("character_id = ? AND voice_id = ''", c.ID).Select("COALESCE(SUM(LENGTH(text)),0)").Scan(&chars)
 	return n, chars
 }
 

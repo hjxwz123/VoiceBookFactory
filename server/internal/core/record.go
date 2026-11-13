@@ -166,7 +166,7 @@ func (a *App) transcribeLong(ctx context.Context, prov asr.Provider, path, lang 
 		}
 		res, err := prov.Transcribe(ctx, out, lang)
 		if err != nil {
-			return nil, "", err
+			return nil, "", withDetail("语音识别失败", err)
 		}
 		for _, w := range res.Words {
 			words = append(words, align.Word{Text: w.Text, StartMs: w.StartMs + start, EndMs: w.EndMs + start})

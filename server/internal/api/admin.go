@@ -1176,10 +1176,19 @@ func (s *Server) adminRoutes(r chi.Router) {
 		return map[string]any{"imported": n}, nil
 	}))
 
+	// ---------------- errors users were shown in plain words ----------------
+	r.Get("/errors", h(func(r *http.Request) (any, error) {
+		q := s.app.DB.Model(&model.ErrorLog{})
+		if ref := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("ref"))); ref != "" {
+			q = q.Where("ref = ?", strings.Trim(ref, "#（）() "))
+		}
+		return paginate[model.ErrorLog](r, q, "created_at desc")
+	}))
+
 	// ---------------- task queues ----------------
 	r.Get("/job-queues", h(func(r *http.Request) (any, error) { return s.app.QueueOverview(), nil }))
 	saveQueue := func(r *http.Request, id string) (any, error) {
-		if err := requireRole(r, model.AdminOperator); err != nil {
+		if err := requireRole(r, model.AdminOps, model.AdminOperator); err != nil {
 			return nil, err
 		}
 		var in core.QueueInput
@@ -1196,7 +1205,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Post("/job-queues", h(func(r *http.Request) (any, error) { return saveQueue(r, "") }))
 	r.Put("/job-queues/{id}", h(func(r *http.Request) (any, error) { return saveQueue(r, param(r, "id")) }))
 	r.Delete("/job-queues/{id}", h(func(r *http.Request) (any, error) {
-		if err := requireRole(r, model.AdminOperator); err != nil {
+		if err := requireRole(r, model.AdminOps, model.AdminOperator); err != nil {
 			return nil, err
 		}
 		if err := s.app.DeleteQueue(param(r, "id")); err != nil {
