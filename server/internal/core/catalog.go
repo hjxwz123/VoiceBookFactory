@@ -198,6 +198,20 @@ func (a *App) seedQwenCatalog() {
 	}
 }
 
+// seedVolcCatalog keeps the Volcengine 豆包 2.0 voices in the library (hidden until an audio generation account
+// is enabled). They have no official previews; a preview is generated the first time someone listens.
+func (a *App) seedVolcCatalog() {
+	var list []tts.RemoteVoice
+	for _, v := range tts.VolcCatalog() {
+		list = append(list, v.Remote())
+	}
+	if n, err := a.UpsertCatalogVoices("volcengine_audio", "", list); err != nil {
+		slog.Warn("seed volcengine voices", "err", err)
+	} else if n > 0 {
+		slog.Info("seeded volcengine voices", "count", n)
+	}
+}
+
 // StartPreviewPackImport downloads the official base-voice preview pack and attaches previews to voices.
 func (a *App) StartPreviewPackImport(userID, url string) (*model.Job, error) {
 	url = firstNonEmpty(strings.TrimSpace(url), QwenBasePreviewPackURL)

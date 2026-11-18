@@ -1,26 +1,10 @@
-import { motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle2, ChevronDown, Circle } from '@/components/icons'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { duration, num, pct } from '@/lib/format'
-import { Badge, Button, cn, PageHeader, Panel, Skeleton, Stat, Table, Tip } from '@/components/ui'
+import { Badge, Button, cn, PageHeader, Panel, Skeleton, Stat, Table } from '@/components/ui'
 import { useAdmin } from '../kit'
-
-function Bars({ data, value, label }: { data: any[]; value: (d: any) => number; label: (d: any) => string }) {
-  const max = Math.max(1, ...data.map(value))
-  return (
-    <div>
-      <div className="flex h-28 items-end gap-1">
-        {data.map((d, i) => (
-          <Tip key={i} label={label(d)}>
-            <motion.div className="min-w-1 max-w-8 flex-1 rounded-t-[2px] bg-accent/80 hover:bg-accent" initial={{ height: 0 }} animate={{ height: `${Math.max(2, (value(d) / max) * 100)}%` }} transition={{ type: 'spring', stiffness: 140, damping: 20, delay: i * 0.01 }} />
-          </Tip>
-        ))}
-      </div>
-      <div className="mt-1 flex justify-between text-[11px] text-faint"><span>{data[0]?.Day}</span><span>{data[data.length - 1]?.Day}</span></div>
-    </div>
-  )
-}
+import { Analytics } from './Analytics'
 
 export default function Dashboard() {
   const { data: d } = useAdmin<any>('/dashboard', {}, { refetch: 30000 })
@@ -38,22 +22,16 @@ export default function Dashboard() {
           ))}
         </div>
       )}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Panel><Stat label="注册用户" value={num(d.users.total)} hint={`7 天新增 ${num(d.users.new7d)}`} /></Panel>
-        <Panel><Stat label="日活 / 月活" value={`${num(d.users.dau)} / ${num(d.users.mau)}`} hint={`当前在线 ${num(d.online)}`} /></Panel>
-        <Panel><Stat label="工作室" value={num(d.studios.total)} hint={`团队 ${d.studios.team} · 付费 ${d.studios.paying}`} /></Panel>
-        <Panel><Stat label="30 天消耗积分" value={num(d.credits.consumed30d)} hint={`发放 ${num(d.credits.granted30d)} · 成本 ¥${(d.credits.cost30d ?? 0).toFixed(2)}`} /></Panel>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Panel><Stat label="图书" value={num(d.content.books)} hint={`${num(d.content.chapters)} 章`} /></Panel>
-        <Panel><Stat label="成品总时长" value={duration(d.content.audioMs)} /></Panel>
-        <Panel><Stat label="24 小时合成字数" value={num(d.content.chars24h)} /></Panel>
-        <Panel><Stat label="24 小时成品" value={num(d.content.renders24h)} hint="章" /></Panel>
-      </div>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="每日注册"><Bars data={d.signupSeries ?? []} value={(x) => x.N} label={(x) => `${x.Day}：${x.N} 人`} /></Panel>
-        <Panel title="每日积分消耗"><Bars data={d.usageSeries ?? []} value={(x) => x.Credits} label={(x) => `${x.Day}：${num(x.Credits)} 积分，${num(x.Chars)} 字，成本 ¥${(x.Cost ?? 0).toFixed(2)}`} /></Panel>
-      </div>
+      <Panel padded={false}>
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel bg-line lg:grid-cols-4">
+          <div className="bg-surface px-5 py-4"><Stat label="注册用户" value={num(d.users.total)} hint={`7 天新增 ${num(d.users.new7d)}`} /></div>
+          <div className="bg-surface px-5 py-4"><Stat label="日活 / 月活" value={`${num(d.users.dau)} / ${num(d.users.mau)}`} hint={`当前在线 ${num(d.online)}`} /></div>
+          <div className="bg-surface px-5 py-4"><Stat label="工作室" value={num(d.studios.total)} hint={`团队 ${d.studios.team} · 付费 ${d.studios.paying}`} /></div>
+          <div className="bg-surface px-5 py-4"><Stat label="图书 / 成品总时长" value={num(d.content.books)} hint={`${num(d.content.chapters)} 章 · ${duration(d.content.audioMs)} · 24 小时合成 ${num(d.content.renders24h)} 章`} /></div>
+        </div>
+      </Panel>
+      <Analytics />
+      <h2 className="pt-2 font-serif text-[18px] font-semibold">实时状态</h2>
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <Panel title="供应商健康度" padded={false}>
           <Table>

@@ -10,12 +10,14 @@ import (
 )
 
 type SiteSettings struct {
-	Name              string `json:"name"`
-	Slogan            string `json:"slogan"`
-	Logo              string `json:"logo"`
-	RegistrationOpen  bool   `json:"registrationOpen"`
-	InviteOnly        bool   `json:"inviteOnly"`
-	InviteCode        string `json:"inviteCode"`
+	Name             string `json:"name"`
+	Slogan           string `json:"slogan"`
+	Logo             string `json:"logo"`
+	RegistrationOpen bool   `json:"registrationOpen"`
+	RegCodeRequired  bool   `json:"regCodeRequired"` // new accounts need a registration code issued by an administrator
+	// before 0.1.5 one shared "invite code"; moved to a registration code at start-up (migrateRegistrationCode)
+	InviteOnly        bool   `json:"inviteOnly,omitempty"`
+	InviteCode        string `json:"inviteCode,omitempty"`
 	SignupCredits     int64  `json:"signupCredits"`
 	MaxUploadMB       int    `json:"maxUploadMb"`
 	MaxBookChars      int    `json:"maxBookChars"`
@@ -24,6 +26,25 @@ type SiteSettings struct {
 	SpeechRate        int    `json:"speechRate"`
 	ICP               string `json:"icp"`
 	Operator          string `json:"operator"` // legal entity running the site, shown in the agreements
+}
+
+// ReferralSettings are the rules of the invite program: users share their invite code; whoever signs
+// up with it is their invitee.
+type ReferralSettings struct {
+	Enabled        bool    `json:"enabled"`
+	InviterCredits int64   `json:"inviterCredits"` // inviter's reward for each invitee who signs up
+	InviteeCredits int64   `json:"inviteeCredits"` // invitee's reward, on top of the usual sign-up credits
+	InviterAfter   string  `json:"inviterAfter"`   // when the inviter's reward is granted: signup | payment (the invitee's first payment)
+	CreditDays     int     `json:"creditDays"`     // validity of reward credits, 0 = never expire
+	DailyLimit     int     `json:"dailyLimit"`     // sign-up rewards an inviter can get per day, 0 = no limit
+	TotalLimit     int     `json:"totalLimit"`     // sign-up rewards an inviter can get in total, 0 = no limit
+	CommissionRate float64 `json:"commissionRate"` // percent of each payment by an invitee, paid to the inviter as credits
+	CreditsPerYuan int64   `json:"creditsPerYuan"` // how many credits one yuan of commission is worth
+	CommissionOn   string  `json:"commissionOn"`   // first | all payments
+	CommissionDays int     `json:"commissionDays"` // only payments within this many days of sign-up, 0 = no limit
+	BypassRegCode  bool    `json:"bypassRegCode"`  // an invite link also works while registration codes are required
+	PosterTitle    string  `json:"posterTitle"`
+	PosterText     string  `json:"posterText"`
 }
 
 type SMTPSettings struct {
@@ -93,8 +114,10 @@ var defaultCasting = map[string]model.CastingPolicy{
 }
 
 var settingDefaults = map[string]any{
-	"site":           SiteSettings{Name: "声书工坊", Slogan: "让每一本书都被好好听见", RegistrationOpen: true, SignupCredits: 20000, MaxUploadMB: 200, MaxBookChars: 3_000_000, FreePreviewsDaily: 30, SpeechRate: 220},
-	"smtp":           SMTPSettings{Port: 465, TLS: true},
+	"site": SiteSettings{Name: "声书工坊", Slogan: "让每一本书都被好好听见", RegistrationOpen: true, SignupCredits: 20000, MaxUploadMB: 200, MaxBookChars: 3_000_000, FreePreviewsDaily: 30, SpeechRate: 220},
+	"smtp": SMTPSettings{Port: 465, TLS: true},
+	"referral": ReferralSettings{InviterCredits: 2000, InviteeCredits: 2000, InviterAfter: "signup", CreditDays: 365, DailyLimit: 20,
+		CommissionRate: 10, CreditsPerYuan: 100, CommissionOn: "all", PosterTitle: "把小说做成有声书", PosterText: "AI 识别角色、配好声音，几分钟听到第一章"},
 	"ai_label":       AILabelSettings{Explicit: false, Text: "本作品音频由人工智能辅助生成。", Position: "outro", Implicit: true, Producer: "声书工坊"},
 	"moderation":     ModerationSettings{Enabled: true, Mode: "post", UseLLM: false},
 	"billing":        BillingSettings{BYOKFeePer1K: 0, MarketShare: 0.7, DefaultPlan: "free"},
@@ -148,6 +171,12 @@ func (a *App) SetSetting(key string, v any) error {
 func (a *App) Site() SiteSettings {
 	var s SiteSettings
 	a.Setting("site", &s)
+	return s
+}
+
+func (a *App) Referral() ReferralSettings {
+	var s ReferralSettings
+	a.Setting("referral", &s)
 	return s
 }
 

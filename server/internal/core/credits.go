@@ -84,6 +84,10 @@ func (a *App) Grant(studioID string, amount int64, source string, expires *time.
 			kind = "market_income"
 		case "promo":
 			kind = "promo"
+		case "referral":
+			kind = "referral"
+		case "signup":
+			kind = "signup"
 		}
 		return tx.Create(&model.CreditLedger{StudioID: studioID, Delta: amount, BalanceAfter: bal, Kind: kind, Reason: note, OperatorID: operatorID, RefType: "lot", RefID: lot.ID}).Error
 	})
@@ -182,6 +186,7 @@ type Charge struct {
 	Model     string
 	BYOK      bool
 	CostCNY   float64
+	Noted     bool  // the calls to the account were already counted, one per request (noteCall)
 	Extra     int64 // e.g. licensed voice surcharge
 	Note      string
 	Free      bool // cache hit / free regeneration
@@ -262,7 +267,7 @@ func (a *App) ChargeCredits(c Charge) (int64, error) {
 	if credits > 0 && c.JobID != "" {
 		a.DB.Model(&model.Job{}).Where("id = ?", c.JobID).Update("credits_used", gorm.Expr("credits_used + ?", credits))
 	}
-	if c.AccountID != "" {
+	if c.AccountID != "" && !c.Noted {
 		a.DB.Model(&model.ProviderAccount{}).Where("id = ?", c.AccountID).Update("calls", gorm.Expr("calls + 1"))
 	}
 	return credits, nil

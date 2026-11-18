@@ -87,7 +87,8 @@ type RedeemBatch struct {
 	Status       string     `gorm:"size:16;index;default:active" json:"status"` // active | disabled
 	Used         int        `json:"used"`
 	CreatedBy    string     `gorm:"size:36" json:"createdBy"`
-	Exported     int        `json:"exported"` // times exported
+	Exported     int        `json:"exported"`   // times exported
+	Price        int64      `json:"priceCents"` // what a code sells for, in fen (0 = free); redeeming a priced code counts as a payment
 }
 
 type RedeemCode struct {

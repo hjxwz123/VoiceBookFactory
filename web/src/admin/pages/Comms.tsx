@@ -1,35 +1,152 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { adminApi } from '@/lib/api'
-import { fromNow } from '@/lib/format'
-import { Badge, Button, Checkbox, confirm, Dialog, Empty, Field, Input, PageHeader, Pagination, Panel, Segmented, Switch, Textarea } from '@/components/ui'
+import dayjs from 'dayjs'
+import { dateTime, fromNow } from '@/lib/format'
+import { Badge, Button, Checkbox, cn, confirm, DateInput, Dialog, Empty, Field, Input, PageHeader, Pagination, Panel, Segmented, Sheet, Skeleton, Switch, Table, Textarea } from '@/components/ui'
+import { Eye, Megaphone, Plus, Trash2 } from '@/components/icons'
+import { AnnouncementBody, AnnouncementDialog } from '@/components/announcement'
 import { ainv, CrudPage, useAdmin } from '../kit'
 
+const kindName: Record<string, string> = { banner: '横幅', modal: '弹窗' }
+const formatName: Record<string, string> = { text: '纯文本', markdown: 'Markdown', html: 'HTML' }
+const levelName: Record<string, [string, any]> = { '': ['普通', 'neutral'], warning: ['重要', 'warn'], danger: ['紧急', 'danger'] }
+// ISO time → the "YYYY-MM-DDTHH:mm" the date picker uses, in local time
+const localInput = (t?: string | null) => (t ? dayjs(t).format('YYYY-MM-DDTHH:mm') : '')
+
+function annState(a: any): [string, any] {
+  const now = Date.now()
+  if (!a.published) return ['草稿', 'neutral']
+  if (a.endsAt && new Date(a.endsAt).getTime() < now) return ['已结束', 'neutral']
+  if (a.startsAt && new Date(a.startsAt).getTime() > now) return ['未开始', 'accent']
+  return ['展示中', 'ok']
+}
+
 export function Announcements() {
+  const [page, setPage] = useState(1)
+  const [edit, setEdit] = useState<any>(null)
+  const { data, refetch } = useAdmin<any>('/announcements', { page, pageSize: 30 })
+  const items: any[] = Array.isArray(data) ? data : data?.items ?? []
   return (
-    <CrudPage
-      title="公告"
-      description="横幅公告显示在用户工作台顶部，可以设置展示时间段。"
-      path="/announcements"
-      columns={[
-        { key: 'title', label: '标题', render: (r: any) => <span className="font-medium">{r.title}</span> },
-        { key: 'kind', label: '形式', render: (r: any) => (r.kind === 'banner' ? '横幅' : r.kind === 'modal' ? '弹窗' : r.kind) },
-        { key: 'startsAt', label: '开始' },
-        { key: 'endsAt', label: '结束' },
-        { key: 'published', label: '发布', render: (r: any) => (r.published ? <Badge tone="ok">已发布</Badge> : <Badge>草稿</Badge>) },
-      ]}
-      fields={[
-        { key: 'title', label: '标题', span: 2 },
-        { key: 'body', label: '内容', type: 'textarea' },
-        { key: 'kind', label: '形式', type: 'select', options: [['banner', '横幅'], ['modal', '弹窗']] },
-        { key: 'level', label: '级别', type: 'select', options: [['', '普通'], ['warning', '重要'], ['danger', '紧急']] },
-        { key: 'link', label: '链接', span: 2 },
-        { key: 'startsAt', label: '开始时间', type: 'date' },
-        { key: 'endsAt', label: '结束时间', type: 'date' },
-        { key: 'published', label: '发布', type: 'switch' },
-      ]}
-      defaults={{ kind: 'banner', level: '', published: false, audience: {} }}
-    />
+    <div className="space-y-5">
+      <PageHeader title="公告" description="横幅显示在用户工作台顶部；弹窗在用户打开任意页面时居中弹出，用户关闭后就不再出现（换设备也不会再弹）。内容可以用纯文本、Markdown 或 HTML。"
+        actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEdit({ kind: 'modal', format: 'markdown', level: '', published: false, audience: {}, title: '', body: '', link: '', linkText: '', width: 0 })}>新建公告</Button>} />
+      <Panel padded={false}>
+        {!data ? <div className="p-4"><Skeleton className="h-32" /></div> : !items.length ? <Empty icon={<Megaphone />} title="还没有公告" /> : (
+          <Table>
+            <thead><tr><th>标题</th><th>形式</th><th>格式</th><th>级别</th><th>时间</th><th>状态</th><th /></tr></thead>
+            <tbody>
+              {items.map((a) => {
+                const [st, tone] = annState(a)
+                return (
+                  <tr key={a.id}>
+                    <td className="font-medium">{a.title}</td>
+                    <td>{kindName[a.kind] ?? a.kind}</td>
+                    <td className="text-muted">{formatName[a.format || 'text']}</td>
+                    <td><Badge tone={levelName[a.level ?? '']?.[1]}>{levelName[a.level ?? '']?.[0] ?? a.level}</Badge></td>
+                    <td className="text-[12px] text-muted">{a.startsAt ? dateTime(a.startsAt) : '立即'} — {a.endsAt ? dateTime(a.endsAt) : '长期'}</td>
+                    <td><Badge tone={tone}>{st}</Badge></td>
+                    <td className="whitespace-nowrap text-right">
+                      <Button size="xs" variant="ghost" onClick={() => setEdit({ ...a })}>编辑</Button>
+                      <Button size="xs" variant="ghost" icon={<Trash2 className="size-3.5" />} aria-label="删除" onClick={async () => {
+                        if (!(await confirm({ title: `删除「${a.title}」？`, danger: true, confirmText: '删除' }))) return
+                        await adminApi.del(`/announcements/${a.id}`)
+                        refetch()
+                        toast.success('已删除')
+                      }} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </Table>
+        )}
+      </Panel>
+      {data && !Array.isArray(data) && <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} />}
+      <AnnouncementEditor value={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); refetch() }} />
+    </div>
+  )
+}
+
+const bodyPlaceholder: Record<string, string> = {
+  text: '直接输入要说的话',
+  markdown: '支持 **加粗**、[链接](https://…)、列表、图片 ![](https://…) 等',
+  html: '<p>支持常用 HTML，例如 <b>加粗</b>、<a href="https://…">链接</a>、<img src="https://…">。脚本、表单和内嵌网页会被去掉。</p>',
+}
+
+function AnnouncementEditor({ value, onClose, onSaved }: { value: any; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState(false)
+  const plans = useAdmin<any>('/plans', { pageSize: 100 }, { enabled: !!value })
+  useEffect(() => {
+    if (value) setF({ ...value, format: value.format || 'text', startsAt: localInput(value.startsAt), endsAt: localInput(value.endsAt), planCodes: (value.audience?.planCodes ?? []) as string[] })
+  }, [value])
+  if (!value || !f) return null
+  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }))
+  const save = async () => {
+    setBusy(true)
+    try {
+      const { planCodes, ...rest } = f
+      const body = { ...rest, startsAt: f.startsAt ? new Date(f.startsAt).toISOString() : null, endsAt: f.endsAt ? new Date(f.endsAt).toISOString() : null, audience: { ...(value.audience ?? {}), planCodes } }
+      if (value.id) await adminApi.put(`/announcements/${value.id}`, body)
+      else await adminApi.post('/announcements', body)
+      ainv(['/announcements'])
+      toast.success(f.published ? '已保存并发布' : '已保存为草稿')
+      onSaved()
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const planList: any[] = plans.data?.items ?? []
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()} title={value.id ? '编辑公告' : '新建公告'} width={720}
+      footer={<><Button onClick={onClose}>取消</Button>{f.kind === 'modal' && <Button icon={<Eye className="size-4" />} onClick={() => setPreview(true)}>预览弹窗</Button>}<Button variant="primary" loading={busy} disabled={!f.title.trim()} onClick={save}>{f.published ? '保存并发布' : '保存草稿'}</Button></>}>
+      <div className="space-y-5">
+        <Field label="标题"><Input value={f.title} onChange={(e) => set('title', e.target.value)} maxLength={200} placeholder="例如 新音色上线、系统维护通知" /></Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="形式" hint={f.kind === 'modal' ? '打开任意页面时居中弹出，关闭后不再出现' : '显示在工作台顶部，可以关闭'}>
+            <Segmented value={f.kind} onChange={(v) => set('kind', v)} items={[{ value: 'modal', label: '弹窗' }, { value: 'banner', label: '横幅' }]} />
+          </Field>
+          <Field label="级别"><Segmented value={f.level ?? ''} onChange={(v) => set('level', v)} items={[{ value: '', label: '普通' }, { value: 'warning', label: '重要' }, { value: 'danger', label: '紧急' }]} /></Field>
+        </div>
+        <Field label="内容">
+          <Segmented size="sm" className="mb-2" value={f.format} onChange={(v) => set('format', v)} items={[{ value: 'markdown', label: 'Markdown' }, { value: 'html', label: 'HTML' }, { value: 'text', label: '纯文本' }]} />
+          <Textarea rows={f.kind === 'modal' ? 9 : 4} value={f.body} onChange={(e) => set('body', e.target.value)} placeholder={bodyPlaceholder[f.format]} className={cn(f.format !== 'text' && 'font-mono text-[12.5px]')} />
+        </Field>
+        {f.body.trim() && (
+          <div>
+            <div className="mb-1.5 text-xs text-muted">预览</div>
+            <div className="rounded-[12px] border border-line bg-surface px-5 py-4">
+              {f.kind === 'banner' ? <div className="text-[13px]"><span className="font-medium">{f.title}</span><AnnouncementBody a={f} inline className="ml-2 text-muted" /></div> : <AnnouncementBody a={f} className="text-[14px] leading-relaxed" />}
+            </div>
+          </div>
+        )}
+        <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
+          <Field label="链接（选填）" hint="站内页面写路径，如 /membership；站外写完整网址"><Input value={f.link ?? ''} onChange={(e) => set('link', e.target.value)} placeholder="/membership 或 https://…" /></Field>
+          <Field label="按钮文字"><Input value={f.linkText ?? ''} maxLength={12} onChange={(e) => set('linkText', e.target.value)} placeholder="查看详情" /></Field>
+        </div>
+        {f.kind === 'modal' && (
+          <Field label="弹窗宽度"><Segmented size="sm" value={String(f.width || 0)} onChange={(v) => set('width', Number(v))} items={[{ value: '0', label: '标准' }, { value: '440', label: '窄' }, { value: '720', label: '宽' }]} /></Field>
+        )}
+        <Field label="面向哪些会员" hint="不选表示所有用户">
+          <div className="flex flex-wrap gap-1.5">
+            {planList.map((p) => {
+              const on = f.planCodes.includes(p.code)
+              return <button key={p.id} onClick={() => set('planCodes', on ? f.planCodes.filter((c: string) => c !== p.code) : [...f.planCodes, p.code])} className={cn('h-8 rounded-control border px-2.5 text-[12.5px] transition-colors', on ? 'border-accent bg-accent-soft text-accent' : 'border-line hover:border-line-strong')}>{p.name}</button>
+            })}
+          </div>
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="开始时间"><DateInput time value={f.startsAt} onChange={(v) => set('startsAt', v)} placeholder="立即开始" /></Field>
+          <Field label="结束时间"><DateInput time value={f.endsAt} onChange={(v) => set('endsAt', v)} placeholder="一直展示" /></Field>
+        </div>
+        <Switch checked={!!f.published} onChange={(v) => set('published', v)} label="发布（关闭则保存为草稿，用户看不到）" />
+      </div>
+      <AnnouncementDialog a={{ ...f, id: 'preview' }} open={preview} onClose={() => setPreview(false)} preview />
+    </Sheet>
   )
 }
 

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -52,6 +54,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Get("/launch-check", h(func(r *http.Request) (any, error) { return s.app.LaunchCheck(), nil }))
 
 	// ---------------- dashboard ----------------
+	r.Get("/dashboard/analytics", h(s.analytics))
 	r.Get("/dashboard", h(func(r *http.Request) (any, error) {
 		db := s.app.DB
 		now := time.Now()
@@ -386,13 +389,17 @@ func (s *Server) adminRoutes(r chi.Router) {
 			return nil, err
 		}
 		var in struct {
-			Amount      int64  `json:"amount"`
-			Reason      string `json:"reason"`
-			ExpiresDays int    `json:"expiresDays"`
+			Amount      int64   `json:"amount"`
+			Reason      string  `json:"reason"`
+			ExpiresDays int     `json:"expiresDays"`
+			PaidYuan    float64 `json:"paidYuan"` // money the user paid for these credits (offline), counts as a payment
 		}
 		bind(r, &in)
 		if strings.TrimSpace(in.Reason) == "" {
 			return nil, core.Bad("请填写调整原因")
+		}
+		if in.PaidYuan < 0 || (in.PaidYuan > 0 && in.Amount <= 0) {
+			return nil, core.Bad("只有发放积分时才能填写实收金额")
 		}
 		var err error
 		if in.Amount > 0 {
@@ -408,7 +415,14 @@ func (s *Server) adminRoutes(r chi.Router) {
 		if err != nil {
 			return nil, err
 		}
-		s.app.Audit(userOf(r).ID, "credits.adjust", "studio", param(r, "id"), in.Reason, clientIP(r), map[string]any{"amount": in.Amount})
+		if fen := yuanToFen(in.PaidYuan); fen > 0 {
+			var st model.Studio
+			s.app.DB.Select("id", "owner_id").First(&st, "id = ?", param(r, "id"))
+			if _, err := s.app.RecordPayment(core.PaymentInput{UserID: st.OwnerID, StudioID: st.ID, Amount: fen, Source: model.PaymentAdmin, Summary: "充值 " + strconv.FormatInt(in.Amount, 10) + " 积分：" + strings.TrimSpace(in.Reason), OperatorID: userOf(r).ID}); err != nil {
+				return nil, err
+			}
+		}
+		s.app.Audit(userOf(r).ID, "credits.adjust", "studio", param(r, "id"), in.Reason, clientIP(r), map[string]any{"amount": in.Amount, "paidYuan": in.PaidYuan})
 		return s.app.Balance(param(r, "id")), nil
 	}))
 
@@ -1249,8 +1263,22 @@ func (s *Server) adminRoutes(r chi.Router) {
 		if a.Audience.V == nil {
 			a.Audience.V = map[string]any{}
 		}
-		if a.Kind == "" {
+		if a.Kind != "modal" {
 			a.Kind = "banner"
+		}
+		switch a.Format {
+		case "markdown", "html", "text":
+		default:
+			a.Format = "text"
+		}
+		if strings.TrimSpace(a.Title) == "" {
+			return core.Bad("请填写公告标题")
+		}
+		if a.Width != 0 && (a.Width < 360 || a.Width > 960) {
+			return core.Bad("弹窗宽度应在 360~960 像素之间")
+		}
+		if a.LinkText = strings.TrimSpace(a.LinkText); utf8.RuneCountInString(a.LinkText) > 12 {
+			return core.Bad("按钮文字最多 12 个字")
 		}
 		return nil
 	}})
@@ -1342,7 +1370,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 	}))
 
 	// ---------------- system ----------------
-	settingKeys := map[string]any{"site": &core.SiteSettings{}, "smtp": &core.SMTPSettings{}, "ai_label": &core.AILabelSettings{}, "moderation": &core.ModerationSettings{}, "billing": &core.BillingSettings{}, "export_presets": &[]core.ExportPreset{}, "casting_policy": &map[string]model.CastingPolicy{}, "sms": &core.SMSSettings{}, "oauth": &core.OAuthSettings{}, "storage": &core.StorageSettings{}}
+	settingKeys := map[string]any{"site": &core.SiteSettings{}, "smtp": &core.SMTPSettings{}, "ai_label": &core.AILabelSettings{}, "moderation": &core.ModerationSettings{}, "billing": &core.BillingSettings{}, "export_presets": &[]core.ExportPreset{}, "casting_policy": &map[string]model.CastingPolicy{}, "sms": &core.SMSSettings{}, "oauth": &core.OAuthSettings{}, "storage": &core.StorageSettings{}, "referral": &core.ReferralSettings{}}
 	r.Get("/settings/{key}", h(func(r *http.Request) (any, error) {
 		key := param(r, "key")
 		proto, okk := settingKeys[key]
@@ -1375,6 +1403,8 @@ func (s *Server) adminRoutes(r chi.Router) {
 			var x core.BillingSettings
 			s.app.Setting(key, &x)
 			v = x
+		case "referral":
+			v = s.app.Referral()
 		case "export_presets":
 			v = s.app.Presets()
 		case "casting_policy":
@@ -1429,7 +1459,21 @@ func (s *Server) adminRoutes(r chi.Router) {
 		case "site":
 			var x core.SiteSettings
 			json.Unmarshal(raw, &x)
-			val = x
+			if err := s.app.SaveSite(x); err != nil {
+				return nil, err
+			}
+			s.app.Audit(userOf(r).ID, "settings.update", "setting", key, "", clientIP(r), nil)
+			return nil, nil
+		case "referral":
+			var x core.ReferralSettings
+			if err := json.Unmarshal(raw, &x); err != nil {
+				return nil, core.Bad("设置格式不正确")
+			}
+			if err := s.app.SaveReferral(x); err != nil {
+				return nil, err
+			}
+			s.app.Audit(userOf(r).ID, "settings.update", "setting", key, "", clientIP(r), nil)
+			return nil, nil
 		case "smtp":
 			var x struct {
 				core.SMTPSettings

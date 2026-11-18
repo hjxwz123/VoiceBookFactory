@@ -462,6 +462,16 @@ type Announcement struct {
 	EndsAt    *time.Time `json:"endsAt"`
 	Published bool       `json:"published"`
 	Link      string     `gorm:"size:500" json:"link"`
+	Format    string     `gorm:"size:16" json:"format"`   // markdown | html | text ("" = text, as before 0.1.5)
+	LinkText  string     `gorm:"size:32" json:"linkText"` // label of the link button in a popup
+	Width     int        `json:"width"`                   // popup width in px (0 = default)
+}
+
+// AnnouncementDismissal records that a user closed an announcement, so it stays closed on every device.
+type AnnouncementDismissal struct {
+	Base
+	AnnouncementID string `gorm:"size:36;uniqueIndex:idx_ann_user" json:"announcementId"`
+	UserID         string `gorm:"size:36;uniqueIndex:idx_ann_user;index" json:"userId"`
 }
 
 type Article struct {
@@ -740,5 +750,6 @@ func All() []any {
 		&Report{}, &ModerationRecord{}, &SensitiveWord{}, &SystemSetting{}, &StoredObject{},
 		&APIKey{}, &Webhook{}, &WebhookDelivery{}, &Channel{}, &Publication{}, &PublishedEpisode{},
 		&PipelineRun{}, &Export{}, &AnnotationDraft{}, &JobQueue{}, &ErrorLog{},
+		&RegistrationCode{}, &RegistrationCodeUse{}, &AnnouncementDismissal{}, &InviteCode{}, &Referral{}, &ReferralReward{}, &Payment{},
 	}
 }

@@ -13,7 +13,7 @@ const schemas: Record<string, { title: string; description: string; fields: F[] 
     title: '站点', description: '名称、注册策略和全局限额。',
     fields: [
       { key: 'name', label: '站点名称' }, { key: 'slogan', label: '标语' }, { key: 'logo', label: 'Logo 地址' }, { key: 'supportEmail', label: '客服邮箱', hint: '协议和隐私政策里的联系方式，也用于接收侵权投诉' }, { key: 'icp', label: 'ICP 备案号' }, { key: 'operator', label: '运营主体', hint: '运营本平台的公司或个人全称，会写进用户协议和隐私政策' },
-      { key: 'registrationOpen', label: '开放注册', type: 'switch' }, { key: 'inviteOnly', label: '仅限邀请码注册', type: 'switch' }, { key: 'inviteCode', label: '邀请码' },
+      { key: 'registrationOpen', label: '开放注册', type: 'switch' }, { key: 'regCodeRequired', label: '必须使用注册码注册', type: 'switch', hint: '开启后，新用户（包括手机号首次登录、第三方账号注册）必须填写注册码。注册码在「用户 → 注册码」里生成；被邀请加入工作室的人不需要' },
       { key: 'signupCredits', label: '注册赠送积分', type: 'number' }, { key: 'maxUploadMb', label: '单文件上传上限（MB）', type: 'number' }, { key: 'maxBookChars', label: '单本书字数上限', type: 'number', hint: '0 表示不限' },
       { key: 'freePreviewsDaily', label: '每日免费试听次数', type: 'number' }, { key: 'speechRate', label: '默认估算语速（字/分钟）', type: 'number' },
     ],

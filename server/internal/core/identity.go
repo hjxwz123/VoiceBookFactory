@@ -84,7 +84,7 @@ func (a *App) SendPhoneCode(ctx context.Context, phone, purpose string) (string,
 }
 
 // LoginWithCode signs in with an email or phone verification code; phone users are created on first login.
-func (a *App) LoginWithCode(target, code, kind, ua, ip string) (*model.User, *TokenPair, error) {
+func (a *App) LoginWithCode(target, code, kind, ua, ip string, codes SignupCodes) (*model.User, *TokenPair, error) {
 	target = strings.TrimSpace(target)
 	isPhone := phoneRe.MatchString(NormalizePhone(target))
 	if isPhone {
@@ -92,16 +92,21 @@ func (a *App) LoginWithCode(target, code, kind, ua, ip string) (*model.User, *To
 	} else {
 		target = NormalizeEmail(target)
 	}
+	var u model.User
+	err := a.DB.Where("email = ? OR phone = ?", target, target).First(&u).Error
+	if err != nil && isPhone && kind != "admin" {
+		if _, aerr := a.admit(codes, false, false); aerr != nil { // a new account: refuse before the code is spent
+			return nil, nil, aerr
+		}
+	}
 	if err := a.CheckCode(target, "login", code); err != nil {
 		return nil, nil, err
 	}
-	var u model.User
-	err := a.DB.Where("email = ? OR phone = ?", target, target).First(&u).Error
 	if err != nil {
 		if !isPhone || kind == "admin" {
 			return nil, nil, Unauthorized("账号不存在，请先注册")
 		}
-		nu, err := a.createUser(nil, &target, "", "用户"+target[len(target)-4:], "")
+		nu, err := a.createUser(nil, &target, "", "用户"+target[len(target)-4:], "", codes, ip)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -124,10 +129,11 @@ func (a *App) finishLogin(u *model.User, kind, ua, ip string) (*model.User, *Tok
 }
 
 // createUser creates an account with a personal studio and signup credits.
-func (a *App) createUser(email, phone *string, password, nickname, avatar string) (*model.User, error) {
+func (a *App) createUser(email, phone *string, password, nickname, avatar string, codes SignupCodes, ip string) (*model.User, error) {
 	site := a.Site()
-	if !site.RegistrationOpen {
-		return nil, Forbidden("平台暂未开放注册")
+	adm, err := a.admit(codes, false, true)
+	if err != nil {
+		return nil, err
 	}
 	u := &model.User{Email: email, Phone: phone, Nickname: truncateStr(nickname, 32), AvatarURL: avatar, Status: model.UserActive, AdminRoles: model.Strings(), EmailVerified: email != nil}
 	if password != "" {
@@ -140,7 +146,7 @@ func (a *App) createUser(email, phone *string, password, nickname, avatar string
 	u.Preferences.V = model.UserPreferences{Theme: "system", Locale: "zh-CN", Notify: map[string]bool{}}
 	u.CV.V = model.CVProfile{Tags: []string{}, Works: []string{}, DemoIDs: []string{}}
 	plan := a.defaultPlan(a.DB)
-	err := a.DB.Transaction(func(tx *gorm.DB) error {
+	err = a.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(u).Error; err != nil {
 			return err
 		}
@@ -152,6 +158,7 @@ func (a *App) createUser(email, phone *string, password, nickname, avatar string
 		return tx.Model(u).Update("personal_studio", st.ID).Error
 	})
 	if err != nil {
+		a.release(adm)
 		return nil, err
 	}
 	if site.SignupCredits > 0 {
@@ -159,6 +166,7 @@ func (a *App) createUser(email, phone *string, password, nickname, avatar string
 		a.Grant(u.PersonalStudio, site.SignupCredits, "signup", &exp, "新用户注册赠送", "")
 	}
 	a.welcomeMembership(u)
+	a.admitted(u, adm, ip)
 	return u, nil
 }
 

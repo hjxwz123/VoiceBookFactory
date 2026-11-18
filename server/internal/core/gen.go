@@ -5,11 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"voicebook/internal/ai/gen"
+	"voicebook/internal/ai/llm"
 	dbx "voicebook/internal/db"
 	"voicebook/internal/jobs"
 	"voicebook/internal/model"
@@ -29,7 +33,8 @@ var moodNames = map[string]string{"calm": "舒缓", "happy": "轻快", "sad": "�
 type GenRequest struct {
 	Kind       string `json:"kind"` // sfx | music | image
 	Prompt     string `json:"prompt"`
-	DurationMs int    `json:"durationMs"`
+	DurationMs int    `json:"durationMs"` // 0: the service picks a length that suits the description (ElevenLabs)
+	Loop       bool   `json:"loop"`       // sound effects: one that repeats seamlessly (ambience)
 	Count      int    `json:"count"`
 	BookID     string `json:"bookId"`
 	SetCover   bool   `json:"setCover"`
@@ -39,6 +44,17 @@ type GenRequest struct {
 	Lyrics string `json:"lyrics"`
 	Style  string `json:"style"`
 	Title  string `json:"title"`
+	// sound effects from services that imitate a sound (Volcengine): up to three audio assets as reference
+	// recordings ("提示音"), named @音频1… in the description
+	References []string `json:"references"`
+}
+
+// sfxReferenceLimit is how many reference recordings a sound effect service takes (0: none).
+func sfxReferenceLimit(provider string) int {
+	if provider == "volcengine_audio" {
+		return 3
+	}
+	return 0
 }
 
 // GenOptions tells the studio's generate form what the configured services can do.
@@ -51,6 +67,12 @@ func (a *App) GenOptions(studioID string) map[string]any {
 			continue
 		}
 		v := map[string]any{"available": true, "provider": acc.Provider, "builtin": acc.Provider == "placeholder"}
+		if kind == model.KindSFX && acc.Provider == "elevenlabs_sfx" {
+			v["name"], v["maxSeconds"], v["loop"], v["autoDuration"] = "ElevenLabs", 30, true, true
+		}
+		if kind == model.KindSFX && acc.Provider == "volcengine_audio" {
+			v["name"], v["maxSeconds"], v["autoDuration"], v["references"], v["chinese"] = "火山引擎", gen.VolcSFXMaxSeconds, true, sfxReferenceLimit(acc.Provider), true
+		}
 		if kind == model.KindMusic {
 			v["features"] = gen.MusicFeaturesOf(acc.Provider)
 			if acc.Provider == "suno" {
@@ -99,6 +121,26 @@ func (a *App) EnqueueGenerate(x *Access, in GenRequest) (*model.Job, error) {
 	if feature == "" {
 		return nil, Bad("不支持的生成类型")
 	}
+	var refs []string
+	if kind == model.KindSFX && len(in.References) > 0 {
+		limit := sfxReferenceLimit(acc.Provider)
+		if limit == 0 {
+			return nil, Bad("当前的音效服务不支持参考音频")
+		}
+		if len(in.References) > limit {
+			return nil, Bad("最多选 %d 段参考音频", limit)
+		}
+		for _, id := range in.References {
+			var as model.Asset
+			if a.DB.First(&as, "id = ?", id).Error != nil || !a.assetUsableBy(x, &as) {
+				return nil, Bad("找不到选中的参考音频")
+			}
+			if as.DurationMs <= 0 && !strings.HasPrefix(as.Mime, "audio/") {
+				return nil, Bad("「%s」不是音频", as.Name)
+			}
+			refs = append(refs, as.ID)
+		}
+	}
 	if count <= 0 {
 		count = map[string]int{model.KindSFX: 4, model.KindMusic: 1, model.KindImage: 4}[kind]
 	}
@@ -116,9 +158,55 @@ func (a *App) EnqueueGenerate(x *Access, in GenRequest) (*model.Job, error) {
 		title = "AI 封面 · 《" + clip(b.Title, 20) + "》"
 	}
 	j := &model.Job{Type: kind + "_generate", StudioID: x.StudioID, BookID: in.BookID, RefType: "generate", Title: title, CreatedBy: x.User.ID, MaxAttempts: 1,
-		Payload: model.Map{V: map[string]any{"prompt": prompt, "durationMs": in.DurationMs, "count": count, "setCover": in.SetCover, "noTitle": in.NoTitle,
+		Payload: model.Map{V: map[string]any{"prompt": prompt, "durationMs": max(in.DurationMs, 0), "loop": in.Loop && kind == model.KindSFX, "count": count, "setCover": in.SetCover, "noTitle": in.NoTitle,
 			"vocal": in.Vocal, "lyrics": strings.TrimSpace(in.Lyrics), "style": strings.TrimSpace(in.Style), "title": strings.TrimSpace(in.Title)}}}
+	if len(refs) > 0 {
+		j.Payload.V["references"] = refs
+	}
 	return j, a.Q.Enqueue(j)
+}
+
+// assetUsableBy: official library assets, the user's own personal assets and the studio's assets.
+func (a *App) assetUsableBy(x *Access, as *model.Asset) bool {
+	switch {
+	case as.Scope == model.ScopeSystem:
+		return true
+	case as.Scope == model.ScopeUser && as.StudioID == "":
+		return as.OwnerUserID == x.User.ID
+	}
+	return as.StudioID == x.StudioID
+}
+
+// sfxReferences cuts each reference asset to the first 30 seconds of mono WAV, the clip size the service takes.
+func (a *App) sfxReferences(ctx context.Context, ids []string) ([][]byte, func(), error) {
+	if len(ids) == 0 {
+		return nil, func() {}, nil
+	}
+	dir, err := a.Store.TempDir("sfx-ref")
+	if err != nil {
+		return nil, nil, err
+	}
+	done := func() { os.RemoveAll(dir) }
+	var out [][]byte
+	for i, id := range ids {
+		p, as, err := a.AssetPath(id)
+		if err != nil {
+			done()
+			return nil, nil, fmt.Errorf("参考音频不存在了，请重新选择")
+		}
+		clipPath := filepath.Join(dir, fmt.Sprintf("ref%d.wav", i))
+		if err := a.FF.Cut(ctx, p, clipPath, 0, 29_500, 1, ""); err != nil {
+			done()
+			return nil, nil, fmt.Errorf("读取参考音频「%s」失败：%w", as.Name, err)
+		}
+		b, err := os.ReadFile(clipPath)
+		if err != nil {
+			done()
+			return nil, nil, err
+		}
+		out = append(out, b)
+	}
+	return out, done, nil
 }
 
 // coverImagePrompt turns a scene idea into a full brief for a real image model. Audiobook stores
@@ -154,6 +242,43 @@ func endUserID(userID string) string {
 	return "vb_" + hex.EncodeToString(sum[:12])
 }
 
+// sfxPromptForProvider rewrites a Chinese description into the short English prompt sound effect models
+// follow best (action, material, setting, distance). Without a language model, or when the account sets
+// translate=false, the description is sent as written.
+func (a *App) sfxPromptForProvider(ctx context.Context, studioID, prompt string, acc *model.ProviderAccount) string {
+	if v, ok := acc.Config.V["translate"].(bool); ok && !v {
+		return prompt
+	}
+	han := false
+	for _, r := range prompt {
+		if unicode.Is(unicode.Han, r) {
+			han = true
+			break
+		}
+	}
+	if !han {
+		return prompt
+	}
+	h, err := a.LLMFor(FeatSFX, "", studioID)
+	if err != nil {
+		return prompt
+	}
+	var out struct {
+		Prompt string `json:"prompt"`
+	}
+	_, err = a.CallLLM(ctx, h, llm.Request{
+		System: "You write prompts for a text-to-sound-effects model. Rewrite the user's description (usually Chinese) as one concise English prompt: " +
+			"describe the sound source, the action, the material, the space and distance, and the mood, in order of what happens. Use audio terms such as " +
+			"ambience, impact, whoosh, footsteps, close-mic, distant, reverb when they fit. No music unless asked, no speech, no numbers of repetitions. Under 40 words.",
+		Messages: []llm.Message{{Role: "user", Content: prompt}},
+		Schema:   obj(map[string]any{"prompt": str()}), SchemaName: "sfx_prompt", MaxTokens: 400, Effort: "low",
+	}, &out)
+	if p := strings.TrimSpace(out.Prompt); err == nil && p != "" {
+		return truncateStr(p, 450)
+	}
+	return prompt
+}
+
 func (a *App) jobGenerate(kind string) jobs.Handler {
 	return func(ctx context.Context, jc *jobs.Context) error {
 		j := jc.Job
@@ -169,20 +294,33 @@ func (a *App) jobGenerate(kind string) jobs.Handler {
 		}
 		feature := map[string]string{model.KindSFX: FeatSFX, model.KindMusic: FeatMusic, model.KindImage: FeatImage}[kind]
 		var assetIDs []string
+		var audioMs int64 // length of what was generated, for the cost of services billed by duration
 		save := func(f *gen.File, name, assetKind string, tags []string, meta map[string]any) error {
 			license := "commercial"
-			if meta["provider"] == "suno" { // a third-party service: its own terms decide whether the song may be used commercially
+			if p := meta["provider"]; p == "suno" || p == "elevenlabs_sfx" || p == "volcengine_audio" { // a third-party service: its own terms decide whether the result may be used commercially
 				license = "provider_terms"
 			}
-			as, err := a.SaveAssetBytes(ctx, AssetInput{StudioID: j.StudioID, OwnerUserID: j.CreatedBy, Kind: assetKind, Name: name, Ext: f.Ext, Mime: f.Mime, Origin: "ai", License: license, Tags: tags, CreatedBy: j.CreatedBy, Description: prompt, Meta: meta}, f.Data)
+			var kept []string
+			for _, t := range tags {
+				if t != "" {
+					kept = append(kept, t)
+				}
+			}
+			as, err := a.SaveAssetBytes(ctx, AssetInput{StudioID: j.StudioID, OwnerUserID: j.CreatedBy, Kind: assetKind, Name: name, Ext: f.Ext, Mime: f.Mime, Origin: "ai", License: license, Tags: kept, CreatedBy: j.CreatedBy, Description: prompt, Meta: meta}, f.Data)
 			if err != nil {
 				return err
 			}
+			audioMs += as.DurationMs
 			assetIDs = append(assetIDs, as.ID)
 			return nil
 		}
 		charge := func(n int) error {
-			_, err := a.ChargeCredits(Charge{StudioID: j.StudioID, UserID: j.CreatedBy, BookID: j.BookID, JobID: j.ID, Feature: feature, Quantity: float64(n), Unit: "calls", Provider: acc.Provider, AccountID: acc.ID, BYOK: byok})
+			c := Charge{StudioID: j.StudioID, UserID: j.CreatedBy, BookID: j.BookID, JobID: j.ID, Feature: feature, Quantity: float64(n), Unit: "calls", Provider: acc.Provider, AccountID: acc.ID, BYOK: byok}
+			if kind == model.KindSFX && acc.Provider != "placeholder" {
+				c.CostCNY = float64(audioMs) / 60000 * acc.CostPerUnit // sound effect services charge by the second
+				c.Noted = true                                         // each request was counted as it was made
+			}
+			_, err := a.ChargeCredits(c)
 			return err
 		}
 		switch kind {
@@ -191,16 +329,53 @@ func (a *App) jobGenerate(kind string) jobs.Handler {
 			if err != nil {
 				return jobs.Permanent(err)
 			}
-			if dur <= 0 {
+			loop, _ := j.Payload.V["loop"].(bool)
+			real := acc.Provider != "placeholder"
+			if !real && dur <= 0 {
 				dur = 4000
 			}
+			sent := prompt
+			if acc.Provider == "elevenlabs_sfx" {
+				jc.Progress(0.02, "正在整理音效描述")
+				sent = a.sfxPromptForProvider(ctx, j.StudioID, prompt, acc)
+			}
+			var refIDs []string
+			if raw, ok := j.Payload.V["references"].([]any); ok {
+				for _, id := range raw {
+					refIDs = append(refIDs, fmt.Sprint(id))
+				}
+			}
+			refs, cleanupRefs, err := a.sfxReferences(ctx, refIDs)
+			if err != nil {
+				return jobs.Permanent(err)
+			}
+			defer cleanupRefs()
 			for i := 0; i < count; i++ {
-				jc.Progress(float64(i)/float64(count), fmt.Sprintf("正在生成第 %d/%d 个候选", i+1, count))
-				f, err := p.GenerateSFX(ctx, gen.SFXRequest{Prompt: prompt, DurationMs: dur + i*700, Seed: fmt.Sprint(j.ID, i)})
+				jc.Progress(float64(i)/float64(count)*0.95+0.05, fmt.Sprintf("正在生成第 %d/%d 个候选", i+1, count))
+				d := dur
+				if !real { // the built-in generator varies the length to give different takes
+					d = dur + i*700
+				}
+				start := time.Now()
+				f, err := p.GenerateSFX(ctx, gen.SFXRequest{Prompt: sent, DurationMs: d, Loop: loop, Seed: fmt.Sprint(j.ID, i), References: refs})
+				if real {
+					a.noteCall(acc.ID, time.Since(start), err)
+				}
 				if err != nil {
+					if i > 0 { // keep the candidates already made and charge only for them
+						slog.Warn("sfx candidate failed", "job", j.ID, "err", err)
+						count = i
+						break
+					}
 					return jobs.Permanent(withDetail("音效生成失败", err))
 				}
+				if sent != prompt {
+					f.Meta["providerPrompt"] = sent
+				}
 				label := sfxKindNames[fmt.Sprint(f.Meta["kind"])]
+				if loop {
+					label = "可循环"
+				}
 				if err := save(f, fmt.Sprintf("%s %d", clip(prompt, 16), i+1), model.AssetSFX, []string{"AI 生成", label}, f.Meta); err != nil {
 					return err
 				}

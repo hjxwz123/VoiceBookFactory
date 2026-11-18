@@ -1,10 +1,12 @@
 import { motion } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useSession } from '@/lib/session'
-import { Button, Field, Input, Segmented, cn } from '@/components/ui'
+import { Avatar, Button, Field, Input, Segmented, cn } from '@/components/ui'
+import { Gift } from '@/components/icons'
 import { AgreeCheckbox, ConsentDialog, LegalLinks } from '@/components/legal'
 import { ThemeToggle } from '@/components/theme-toggle'
 
@@ -63,13 +65,34 @@ function BrandPanel() {
   )
 }
 
+const REF_KEY = 'vb_ref'
+
+/** The friend's invite code this visitor came with: from the link, or remembered for 30 days. */
+export function rememberedReferral(fromLink?: string | null): string {
+  try {
+    if (fromLink) {
+      localStorage.setItem(REF_KEY, JSON.stringify({ code: fromLink, at: Date.now() }))
+      return fromLink
+    }
+    const v = JSON.parse(localStorage.getItem(REF_KEY) ?? 'null')
+    if (v?.code && Date.now() - v.at < 30 * 86400_000) return v.code
+  } catch {}
+  return ''
+}
+
 export function AuthPage({ mode }: { mode: 'login' | 'register' | 'forgot' }) {
   const site = useSession((s) => s.site) ?? {}
   const [params] = useSearchParams()
   const next = params.get('next') || '/'
   const nav = useNavigate()
   const [method, setMethod] = useState<'password' | 'code'>('password')
-  const [form, setForm] = useState({ email: '', password: '', nickname: '', code: '', inviteCode: '' })
+  const [form, setForm] = useState(() => ({ email: '', password: '', nickname: '', code: '', regCode: '', referral: rememberedReferral(params.get('ref')) }))
+  // a new account signing in by phone may need a registration code; the field appears when the server asks
+  const [askRegCode, setAskRegCode] = useState(false)
+  const refCode = form.referral.trim()
+  const { data: invite } = useQuery<any>({ queryKey: ['invite-code', refCode], queryFn: () => api.get(`/invite-codes/${encodeURIComponent(refCode)}`), enabled: !!site.referral && refCode.length >= 4 && mode !== 'forgot', staleTime: 60_000 })
+  const inviteValid = !!invite?.valid
+  const needRegCode = !!site.regCodeRequired && !(site.referralBypass && inviteValid)
   const [busy, setBusy] = useState(false)
   const [devCode, setDevCode] = useState('')
   const [left, setLeft] = useCountdown()
@@ -108,7 +131,8 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' | 'forgot' }) {
   }
   const oauth = (p: string) => {
     // consent travels with the sign-in, so an account created on the way records it
-    const go = () => { window.location.href = `/api/v1/auth/oauth/${p}/start?agree=1&redirect=${encodeURIComponent(next)}` }
+    const extra = (form.regCode.trim() ? `&regCode=${encodeURIComponent(form.regCode.trim())}` : '') + (site.referral && refCode ? `&ref=${encodeURIComponent(refCode)}` : '')
+    const go = () => { window.location.href = `/api/v1/auth/oauth/${p}/start?agree=1&redirect=${encodeURIComponent(next)}${extra}` }
     if (!agree) return setConsent(() => () => { setAgree(true); go() })
     go()
   }
@@ -122,12 +146,15 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' | 'forgot' }) {
         return
       }
       let r
-      if (mode === 'register') r = await api.post('/auth/register', { email: form.email, password: form.password, nickname: form.nickname, code: form.code, inviteCode: form.inviteCode, invitation: params.get('invitation') ?? '', agree: true })
-      else if (method === 'code') r = await api.post('/auth/login/code', { target: form.email, code: form.code, agree: true })
+      const codes = { regCode: form.regCode.trim(), referral: site.referral ? refCode : '' }
+      if (mode === 'register') r = await api.post('/auth/register', { email: form.email, password: form.password, nickname: form.nickname, code: form.code, ...codes, invitation: params.get('invitation') ?? '', agree: true })
+      else if (method === 'code') r = await api.post('/auth/login/code', { target: form.email, code: form.code, ...codes, agree: true })
       else r = await api.post('/auth/login', { email: form.email, password: form.password, agree: true })
       await useSession.getState().signIn(r.accessToken)
+      if (codes.referral) try { localStorage.removeItem(REF_KEY) } catch {}
       nav(mode === 'register' ? '/?welcome=1' : next, { replace: true })
     } catch (e: any) {
+      if (e.code === 'registration_code_required') setAskRegCode(true)
       toast.error(e.message)
     } finally {
       setBusy(false)
@@ -150,6 +177,15 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' | 'forgot' }) {
           <p className="mt-1.5 text-[13.5px] text-muted">
             {mode === 'login' ? '登录后继续你的有声书制作。' : mode === 'register' ? '注册即赠送体验积分，几分钟就能听到第一章。' : '我们会向你的邮箱发送验证码。'}
           </p>
+          {mode === 'register' && inviteValid && (
+            <div className="mt-5 flex items-center gap-3 rounded-panel border border-line bg-surface px-4 py-3">
+              <Avatar name={invite.inviter} src={invite.avatarUrl} size={34} />
+              <div className="min-w-0 text-[13px] leading-snug">
+                <div><span className="font-medium text-ink">{invite.inviter}</span><span className="text-muted"> 邀请你加入</span></div>
+                {invite.inviteeCredits > 0 && <div className="mt-0.5 flex items-center gap-1 text-warn"><Gift className="size-3.5" />注册后额外获得 {invite.inviteeCredits.toLocaleString()} 积分</div>}
+              </div>
+            </div>
+          )}
           {mode === 'login' && site.phoneLogin && (
             <Segmented className="mt-6" value={method} onChange={setMethod} items={[{ value: 'password', label: '密码登录' }, { value: 'code', label: '验证码登录' }]} />
           )}
@@ -177,9 +213,14 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' | 'forgot' }) {
                 <Input type="password" value={form.password} onChange={set('password')} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
               </Field>
             )}
-            {mode === 'register' && site.inviteOnly && (
-              <Field label="邀请码">
-                <Input value={form.inviteCode} onChange={set('inviteCode')} />
+            {((mode === 'register' && needRegCode) || (mode === 'login' && method === 'code' && askRegCode)) && (
+              <Field label="注册码" hint={mode === 'login' ? '这个手机号还没有账号，注册需要填写注册码' : '本站需要注册码才能注册，可以向管理员或客服索取'}>
+                <Input value={form.regCode} onChange={set('regCode')} placeholder="例如 VB7K-QM2X-9PTD" autoComplete="off" className="font-mono" />
+              </Field>
+            )}
+            {mode === 'register' && site.referral && (
+              <Field label="邀请码（选填）" hint={refCode && invite && !inviteValid ? '这个邀请码无效，可以清空后直接注册' : undefined}>
+                <Input value={form.referral} onChange={set('referral')} placeholder="好友给你的邀请码" autoComplete="off" className="font-mono uppercase" />
               </Field>
             )}
             <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy}>

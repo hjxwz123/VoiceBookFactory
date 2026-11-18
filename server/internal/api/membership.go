@@ -184,12 +184,16 @@ func (s *Server) adminMembershipRoutes(r chi.Router) {
 			return nil, err
 		}
 		var in struct {
-			PlanID string `json:"planId"`
-			Days   int    `json:"days"`
-			Note   string `json:"note"`
+			PlanID   string  `json:"planId"`
+			Days     int     `json:"days"`
+			Note     string  `json:"note"`
+			PaidYuan float64 `json:"paidYuan"` // money the user paid for it (offline), counts as a payment
 		}
 		if err := bind(r, &in); err != nil {
 			return nil, err
+		}
+		if in.PaidYuan < 0 {
+			return nil, core.Bad("实收金额不能为负数")
 		}
 		var u model.User
 		if s.app.DB.First(&u, "id = ?", param(r, "id")).Error != nil {
@@ -198,6 +202,9 @@ func (s *Server) adminMembershipRoutes(r chi.Router) {
 		res, err := s.app.GrantMembership(u.ID, in.PlanID, in.Days, model.MemberSourceAdmin, "", firstNonEmptyStr(strings.TrimSpace(in.Note), "管理员开通"), userOf(r).ID)
 		if err != nil {
 			return nil, err
+		}
+		if fen := yuanToFen(in.PaidYuan); fen > 0 {
+			s.app.RecordPayment(core.PaymentInput{UserID: u.ID, StudioID: u.PersonalStudio, Amount: fen, Source: model.PaymentAdmin, Summary: res.Summary, OperatorID: userOf(r).ID})
 		}
 		s.app.Audit(userOf(r).ID, "membership.grant", "user", u.ID, in.Note, clientIP(r), map[string]any{"plan": in.PlanID, "days": in.Days})
 		s.app.Notify(u.ID, "", "membership", "会员已到账", res.Summary+"。", "/membership")

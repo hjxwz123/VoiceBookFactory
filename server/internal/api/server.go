@@ -82,9 +82,11 @@ func (s *Server) Router() http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(jsonOnlyErrors)
 		s.publicRoutes(r)
+		s.publicGrowthRoutes(r)
 		r.Group(func(r chi.Router) {
 			r.Use(s.authenticate("studio"))
 			s.meRoutes(r)
+			s.growthRoutes(r)
 			s.membershipRoutes(r)
 			s.studioRoutes(r)
 			s.bookRoutes(r)
@@ -101,6 +103,7 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.authenticate("admin"))
 			s.adminRoutes(r)
 			s.adminMembershipRoutes(r)
+			s.adminGrowthRoutes(r)
 		})
 	})
 	r.Route("/openapi/v1", func(r chi.Router) {

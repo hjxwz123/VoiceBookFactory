@@ -1,5 +1,6 @@
 // Package tts defines the speech synthesis provider interfaces (synthesis, voice design,
-// cloning, voice changing, multi-speaker dialogue). Qianwen (qwen.go) and MiniMax (minimax.go) are implemented;
+// cloning, voice changing, multi-speaker dialogue). Qianwen (qwen.go), MiniMax (minimax.go) and Volcengine audio
+// generation (volcengine_audio.go) are implemented;
 // other platforms are reserved stubs, and the built-in placeholder engine keeps every workflow runnable.
 package tts
 
@@ -73,6 +74,7 @@ type Audio struct {
 	Data       []byte
 	Format     string // wav | mp3 | pcm
 	SampleRate int
+	Prompts    []string // the text prompt(s) sent, for platforms driven by a natural-language prompt (one per request)
 }
 
 type RemoteVoice struct {
@@ -199,6 +201,32 @@ type Account struct {
 	Model    string
 	Config   map[string]any
 	RPM      int // requests per minute allowed by the account (0 = adapter default)
+	// Refs keeps reference recordings for platforms that imitate a voice from a sample sent with every request
+	// (no voice is stored on the platform); nil when the caller only needs capabilities.
+	Refs RefStore
+}
+
+// RefStore keeps reference recordings on this site; ids are opaque strings.
+type RefStore interface {
+	PutRef(ctx context.Context, name string, data []byte) (string, error)
+	GetRef(ctx context.Context, id string) ([]byte, error)
+	DeleteRef(ctx context.Context, id string) error
+}
+
+// DurationBilled is implemented by platforms that charge per second of generated audio instead of per character.
+type DurationBilled interface {
+	BillsByDuration() bool
+}
+
+// BillsByDuration reports whether p charges by audio length.
+func BillsByDuration(p Provider) bool {
+	d, ok := p.(DurationBilled)
+	return ok && d.BillsByDuration()
+}
+
+// Checker verifies an account without synthesizing (for platforms where every synthesis is billed).
+type Checker interface {
+	Check(ctx context.Context) (string, error)
 }
 
 type Factory func(Account) (Provider, error)

@@ -37,7 +37,12 @@ X-API-Key: vb_xxxxxxxx
 HTTP 状态码不是 200 时，返回：
 
 ```json
-{ "error": { "code": "insufficient_credits", "message": "积分不足：开始制作至少需要 120 积分（角色分析和第一章），当前可用 30" } }
+{
+  "error": {
+    "code": "insufficient_credits",
+    "message": "积分不足：开始制作至少需要 120 积分（角色分析和第一章），当前可用 30"
+  }
+}
 ```
 
 `message` 是写给人看的，可以直接展示；程序请按 `code` 判断：
@@ -61,7 +66,20 @@ HTTP 状态码不是 200 时，返回：
 返回工作室能用的音色，`id` 用于配音和指定旁白。
 
 ```json
-{ "voices": [ { "id": "01a1…", "name": "沉稳旁白·男", "gender": "male", "ageGroup": "adult", "tags": ["旁白"], "language": "zh-CN", "priceTier": "premium", "sampleUrl": "https://…" } ] }
+{
+  "voices": [
+    {
+      "id": "01a1…",
+      "name": "沉稳旁白·男",
+      "gender": "male",
+      "ageGroup": "adult",
+      "tags": ["旁白"],
+      "language": "zh-CN",
+      "priceTier": "premium",
+      "sampleUrl": "https://…"
+    }
+  ]
+}
 ```
 
 ### 导入书稿 `POST /books`（produce）
@@ -76,12 +94,24 @@ HTTP 状态码不是 200 时，返回：
 | `config` | 一键成书的设置，见下方「一键成书设置」 |
 
 ```bash
-curl -X POST "$BASE/books" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"title":"雨夜","text":"第一章 初见\n林黛玉坐在窗前……","autoProduce":true,"config":{"tier":"standard","bgm":true}}'
+curl -X POST "$BASE/books" \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "雨夜",
+    "text": "第一章 初见\n林黛玉坐在窗前……",
+    "autoProduce": true,
+    "config": { "tier": "standard", "bgm": true }
+  }'
 ```
 
 ```json
-{ "bookId": "01a1…", "chapters": 24, "detection": "rules", "pipelineId": "01a1…" }
+{
+  "bookId": "01a1…",
+  "chapters": 24,
+  "detection": "rules",
+  "pipelineId": "01a1…"
+}
 ```
 
 `detection` 说明章节是怎么识别的：`structure` 文档目录、`rules` 章节标题、`size` 没找到标题时按字数切分、`single` 整篇一章。
@@ -128,8 +158,18 @@ curl -X POST "$BASE/books" -H "Authorization: Bearer $KEY" -H "Content-Type: app
 ```json
 {
   "outputs": [
-    { "chapterId": "…", "index": 1, "title": "第一章 初见", "durationMs": 612000, "format": "mp3", "stale": false,
-      "url": "https://…", "timings": [ { "segmentId": "…", "characterId": "…", "startMs": 1000, "endMs": 3400, "text": "林黛玉坐在窗前。" } ] }
+    {
+      "chapterId": "…",
+      "index": 1,
+      "title": "第一章 初见",
+      "durationMs": 612000,
+      "format": "mp3",
+      "stale": false,
+      "url": "https://…",
+      "timings": [
+        { "segmentId": "…", "characterId": "…", "startMs": 1000, "endMs": 3400, "text": "林黛玉坐在窗前。" }
+      ]
+    }
   ],
   "expiresIn": 86400
 }
@@ -147,7 +187,11 @@ curl -X POST "$BASE/books" -H "Authorization: Bearer $KEY" -H "Content-Type: app
 | `speed` | 可选，语速 |
 
 ```json
-{ "url": "https://…", "durationMs": 2300, "credits": 3 }
+{
+  "url": "https://…",
+  "durationMs": 2300,
+  "credits": 3
+}
 ```
 
 ## 5. Webhook 通知
@@ -155,7 +199,12 @@ curl -X POST "$BASE/books" -H "Authorization: Bearer $KEY" -H "Content-Type: app
 在「工作室设置 → 开发者 → Webhook 通知」填写你的地址并选择事件。事件发生时，平台向这个地址发送 POST 请求：
 
 ```json
-{ "event": "pipeline.completed", "id": "01a1…", "createdAt": "2026-11-13T08:00:00Z", "data": { "runId": "…", "bookId": "…" } }
+{
+  "event": "pipeline.completed",
+  "id": "01a1…",
+  "createdAt": "2026-11-13T08:00:00Z",
+  "data": { "runId": "…", "bookId": "…" }
+}
 ```
 
 | 事件 | `data` |
@@ -199,8 +248,12 @@ BASE=https://voicebook.example.com/openapi/v1
 KEY=vb_xxxxxxxx
 
 # 1. 导入并开始一键成书
-RUN=$(curl -s -X POST "$BASE/books" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  --data-binary @<(jq -n --rawfile text book.txt '{title:"雨夜", text:$text, autoProduce:true}') | jq -r .pipelineId)
+RUN=$(jq -n --rawfile text book.txt '{title: "雨夜", text: $text, autoProduce: true}' \
+  | curl -s -X POST "$BASE/books" \
+      -H "Authorization: Bearer $KEY" \
+      -H "Content-Type: application/json" \
+      --data-binary @- \
+  | jq -r .pipelineId)
 
 # 2. 等它做完
 while true; do

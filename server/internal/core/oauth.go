@@ -528,6 +528,8 @@ type oauthFlow struct {
 	Redirect string `json:"r"`
 	BindUser string `json:"b,omitempty"`
 	Agree    bool   `json:"a,omitempty"`
+	RegCode  string `json:"c,omitempty"` // registration code typed on the sign-up page
+	Referral string `json:"f,omitempty"` // a friend's invite code
 	Exp      int64  `json:"e"`
 }
 
@@ -542,12 +544,13 @@ func safeRedirect(r string) string {
 
 // OAuthBegin starts a sign-in (or, with bindUserID, links a provider to that account). It returns the
 // provider's authorization URL and the value of the flow cookie.
-func (a *App) OAuthBegin(ctx context.Context, id, redirect, bindUserID string, agree bool) (string, string, error) {
+func (a *App) OAuthBegin(ctx context.Context, id, redirect, bindUserID string, agree bool, codes SignupCodes) (string, string, error) {
 	p, e, err := a.oauthProvider(id)
 	if err != nil {
 		return "", "", err
 	}
-	f := oauthFlow{Provider: id, State: secure.Token(24), Verifier: secure.Token(48), Nonce: secure.Token(24), Redirect: safeRedirect(redirect), BindUser: bindUserID, Agree: agree, Exp: now().Add(OAuthFlowTTL).Unix()}
+	f := oauthFlow{Provider: id, State: secure.Token(24), Verifier: secure.Token(48), Nonce: secure.Token(24), Redirect: safeRedirect(redirect), BindUser: bindUserID, Agree: agree, Exp: now().Add(OAuthFlowTTL).Unix(),
+		RegCode: truncateStr(strings.TrimSpace(codes.RegCode), 40), Referral: truncateStr(strings.TrimSpace(codes.Referral), 20)}
 	q := url.Values{}
 	var endpoint string
 	switch e.Protocol {
@@ -932,8 +935,6 @@ func (a *App) oauthAccount(p OAuthProvider, e OAuthPreset, prof *oauthProfile, f
 		return nil, Forbidden(fmt.Sprintf("这个 %s 账号还没有绑定本站账号。请先注册或登录，再到「账号设置」绑定 %s", e.Name, e.Name))
 	case !site.RegistrationOpen:
 		return nil, Forbidden("平台暂未开放注册")
-	case site.InviteOnly:
-		return nil, Forbidden(fmt.Sprintf("当前为邀请制注册：请先用邀请码注册，再到「账号设置」绑定 %s", e.Name))
 	case !f.Agree:
 		return nil, Bad("注册前请先阅读并同意《用户服务协议》《隐私政策》和《版权与素材使用声明》")
 	}
@@ -942,8 +943,12 @@ func (a *App) oauthAccount(p OAuthProvider, e OAuthPreset, prof *oauthProfile, f
 		emailPtr = &email
 	}
 	nick := firstNonEmpty(prof.Name, strings.Split(email, "@")[0], e.Name+"用户")
-	u, err := a.createUser(emailPtr, nil, "", nick, prof.Avatar)
+	u, err := a.createUser(emailPtr, nil, "", nick, prof.Avatar, SignupCodes{RegCode: f.RegCode, Referral: f.Referral}, ip)
 	if err != nil {
+		var ae *Error
+		if errors.As(err, &ae) && ae.Code == ErrRegCodeRequired {
+			return nil, &Error{Status: 403, Code: ErrRegCodeRequired, Msg: fmt.Sprintf("现在需要注册码才能注册：请在注册页填好注册码，再点「%s」", e.Name)}
+		}
 		return nil, err
 	}
 	u.LegalVersion, u.LegalAgreedAt = a.AgreeLegal(u.ID), &t

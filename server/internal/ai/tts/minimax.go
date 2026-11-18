@@ -62,6 +62,9 @@ func ModelLabel(model string) string {
 	if l, ok := miniMaxModelLabels[model]; ok {
 		return l
 	}
+	if strings.HasPrefix(model, "seed-audio") {
+		return "豆包音频生成"
+	}
 	return model
 }
 

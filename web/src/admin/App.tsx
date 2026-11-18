@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   AudioLines, BadgeCheck, Bot, Boxes, BrainCircuit, ChevronDown, CircleDollarSign, FileText, Gauge, LayoutTemplate, ListChecks, LogOut, Megaphone, MessageSquare, Monitor, Moon, KeyRound,
-  Route as RouteIcon, ScrollText, Settings, ShieldAlert, Store, Sun, Tag, Users, Building2, Languages, FlaskConical, Wallet, Ban, Flag, Receipt, Mail, ServerCog, Crown, Ticket,
+  Route as RouteIcon, ScrollText, Settings, ShieldAlert, Store, Sun, Tag, Users, Building2, Languages, FlaskConical, Wallet, Ban, Flag, Receipt, Mail, ServerCog, Crown, Ticket, Gift,
 } from '@/components/icons'
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
@@ -60,14 +60,16 @@ const P = {
   Feedback: lazy(() => import('./pages/Comms').then((m) => ({ default: m.Feedback }))),
   Messages: lazy(() => import('./pages/Comms').then((m) => ({ default: m.Messages }))),
   Settings: lazy(() => import('./pages/SettingsPage')),
+  RegCodes: lazy(() => import('./pages/Growth').then((m) => ({ default: m.RegCodes }))),
+  Referrals: lazy(() => import('./pages/Growth').then((m) => ({ default: m.Referrals }))),
 }
 
 const groups: { title: string; items: [string, string, any, any][] }[] = [
   { title: '概览', items: [['/', '数据看板', Gauge, P.Dashboard]] },
-  { title: '用户', items: [['/users', '用户', Users, P.Users], ['/studios', '工作室', Building2, P.Studios]] },
+  { title: '用户', items: [['/users', '用户', Users, P.Users], ['/studios', '工作室', Building2, P.Studios], ['/registration-codes', '注册码', KeyRound, P.RegCodes]] },
   { title: '内容', items: [['/voices', '音色库', AudioLines, P.Voices], ['/assets', '素材库', Boxes, P.Assets], ['/templates', '片头片尾', LayoutTemplate, P.Templates], ['/lexicon', '平台词典', Languages, P.Lexicon]] },
   { title: 'AI 服务', items: [['/providers', '模型与供应商', Bot, P.Providers], ['/routing', '路由规则', RouteIcon, P.Routing], ['/pricing', '积分定价', Tag, P.Pricing], ['/prompts', '提示词', BrainCircuit, P.Prompts], ['/evals', '效果评测', FlaskConical, P.Evals]] },
-  { title: '商业', items: [['/plans', '会员套餐', Crown, P.Plans], ['/redeem', '兑换码', Ticket, P.Redeem], ['/ledger', '积分流水', ScrollText, P.Ledger], ['/finance', '成本报表', CircleDollarSign, P.FinanceReport], ['/listings', '音色市场', Store, P.Listings], ['/withdrawals', '提现审核', Wallet, P.Withdrawals]] },
+  { title: '商业', items: [['/plans', '会员套餐', Crown, P.Plans], ['/redeem', '兑换码', Ticket, P.Redeem], ['/referrals', '邀请返利', Gift, P.Referrals], ['/ledger', '积分流水', ScrollText, P.Ledger], ['/finance', '成本报表', CircleDollarSign, P.FinanceReport], ['/listings', '音色市场', Store, P.Listings], ['/withdrawals', '提现审核', Wallet, P.Withdrawals]] },
   { title: '安全与合规', items: [['/moderation', '内容审核', ShieldAlert, P.Moderation], ['/consents', '声音授权', FileText, P.Consents], ['/legal', '协议与政策', ScrollText, P.Legal], ['/reports', '举报', Flag, P.Reports], ['/words', '敏感词', Ban, P.Words]] },
   { title: '运营', items: [['/announcements', '公告', Megaphone, P.Announcements], ['/articles', '帮助文章', FileText, P.Articles], ['/feedback', '用户反馈', MessageSquare, P.Feedback], ['/messages', '站内信', Mail, P.Messages]] },
   { title: '系统', items: [['/jobs', '任务队列', ListChecks, P.Jobs], ['/system', '运行状态', ServerCog, P.System], ['/audit', '操作日志', ScrollText, P.Audit], ['/settings', '系统设置', Settings, P.Settings]] },

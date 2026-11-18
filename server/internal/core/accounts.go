@@ -104,8 +104,11 @@ type RegisterInput struct {
 	Password   string `json:"password"`
 	Nickname   string `json:"nickname"`
 	Code       string `json:"code"`
-	InviteCode string `json:"inviteCode"`
+	RegCode    string `json:"regCode"`    // registration code, when the site requires one
+	InviteCode string `json:"inviteCode"` // older clients sent the registration code under this name
+	Referral   string `json:"referral"`   // a friend's invite code
 	Invitation string `json:"invitation"` // studio invitation token
+	IP         string `json:"-"`
 	Identity   string `json:"identity"`
 	Agree      bool   `json:"agree"` // accepted the user agreement, privacy policy and copyright statement
 }
@@ -125,8 +128,9 @@ func (a *App) Register(in RegisterInput) (*model.User, error) {
 	if err := ValidatePassword(in.Password); err != nil {
 		return nil, err
 	}
-	if site.InviteOnly && in.Invitation == "" && (site.InviteCode == "" || in.InviteCode != site.InviteCode) {
-		return nil, Forbidden("当前为邀请制注册，请填写正确的邀请码")
+	codes, invited := SignupCodes{RegCode: firstNonEmpty(in.RegCode, in.InviteCode), Referral: in.Referral}, a.invitationValid(in.Invitation)
+	if _, err := a.admit(codes, invited, false); err != nil { // before the verification code is spent
+		return nil, err
 	}
 	if a.EmailVerificationRequired() {
 		if err := a.CheckCode(email, "register", in.Code); err != nil {
@@ -139,6 +143,10 @@ func (a *App) Register(in RegisterInput) (*model.User, error) {
 		return nil, Conflict("该邮箱已注册，请直接登录")
 	}
 	hash, err := secure.HashPassword(in.Password)
+	if err != nil {
+		return nil, err
+	}
+	adm, err := a.admit(codes, invited, true)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +171,7 @@ func (a *App) Register(in RegisterInput) (*model.User, error) {
 		return tx.Model(u).Update("personal_studio", st.ID).Error
 	})
 	if err != nil {
+		a.release(adm)
 		return nil, err
 	}
 	if site.SignupCredits > 0 {
@@ -170,6 +179,7 @@ func (a *App) Register(in RegisterInput) (*model.User, error) {
 		a.Grant(u.PersonalStudio, site.SignupCredits, "signup", &exp, "新用户注册赠送", "")
 	}
 	a.welcomeMembership(u)
+	a.admitted(u, adm, in.IP)
 	if in.Invitation != "" {
 		a.AcceptInvitation(u, in.Invitation)
 	}

@@ -10,7 +10,7 @@ const kindLabel: Record<string, string> = { llm: '大语言模型', tts: '语音
 const protocolName: Record<string, string> = { openai_chat: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic Messages（Claude）' }
 const adapterName = (p: any): string =>
   protocolName[p.provider] ??
-  ({ openai_image: 'OpenAI Images API', gemini_image: p.config?.protocol === 'generate_content' ? 'Gemini generateContent' : 'Gemini Interactions', placeholder: '内置', qwen: '千问', aliyun: '阿里云百炼', minimax: 'MiniMax', openai_compat: 'OpenAI 兼容' } as Record<string, string>)[p.provider] ??
+  ({ openai_image: 'OpenAI Images API', gemini_image: p.config?.protocol === 'generate_content' ? 'Gemini generateContent' : 'Gemini Interactions', placeholder: '内置', qwen: '千问', aliyun: '阿里云百炼', minimax: 'MiniMax', openai_compat: 'OpenAI 兼容', volcengine_audio: '火山引擎音频生成', volcengine: '火山引擎', elevenlabs_sfx: 'ElevenLabs', suno: 'Suno 中转' } as Record<string, string>)[p.provider] ??
   p.provider
 
 // ---------------- Providers ----------------
@@ -23,7 +23,7 @@ export function Providers() {
   const list = (data ?? []).filter((p) => p.kind === kind && p.scope === 'platform')
   return (
     <div>
-      <PageHeader title="模型与供应商" description="平台调用 AI 服务使用的账号。大语言模型支持 OpenAI Chat、OpenAI Responses 和 Anthropic Claude 三种协议，任何兼容服务都可以接入。语音合成已接入千问与 MiniMax，图像生成已接入 OpenAI GPT Image 与 Google Nano Banana，音乐和音效生成已预留接口。" actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEdit({ kind })}>添加账号</Button>} />
+      <PageHeader title="模型与供应商" description="平台调用 AI 服务使用的账号。大语言模型支持 OpenAI Chat、OpenAI Responses 和 Anthropic Claude 三种协议，任何兼容服务都可以接入。语音合成已接入千问、MiniMax 与火山引擎，语音识别已接入千问、火山引擎与 OpenAI 兼容服务，图像生成已接入 OpenAI GPT Image 与 Google Nano Banana，音效已接入 ElevenLabs 与火山引擎。" actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEdit({ kind })}>添加账号</Button>} />
       <Segmented className="mb-4" value={kind} onChange={setKind} items={Object.entries(kindLabel).map(([k, l]) => ({ value: k, label: `${l} ${(data ?? []).filter((p) => p.kind === k && p.scope === 'platform').length || ''}` }))} />
       <Panel padded={false}>
         {!list.length ? <Empty title={`还没有${kindLabel[kind]}账号`} description={kind === 'llm' ? '角色分析、AI 画本、选角等核心功能依赖大语言模型，请至少配置一个。' : kind === 'image' ? '没有接入图像模型时，封面和角色头像由内置生成器画抽象图，不能写书名。推荐接入 OpenAI GPT Image 或 Google Nano Banana。' : '未配置时会使用内置演示引擎。'} action={<Button variant="primary" onClick={() => setEdit({ kind })}>添加</Button>} /> : (
@@ -43,7 +43,7 @@ export function Providers() {
                   <td className="whitespace-nowrap text-right">
                     <Button size="xs" variant="ghost" loading={testing === p.id} onClick={async () => { setTesting(p.id); try { const r = await adminApi.post(`/providers/${p.id}/test`); if (r?.ok === false) toast.error(r.message); else toast.success(r?.message || '连接正常') } catch (e: any) { toast.error(e.message) } finally { setTesting(''); ainv(['/providers']) } }}>测试</Button>
                     {p.kind === 'tts' && <Button size="xs" variant="ghost" icon={<RefreshCw className="size-3" />} onClick={async () => { try { const r = await adminApi.post(`/providers/${p.id}/sync-voices`); toast.success(r.imported ? `新增 ${r.imported} 个音色` : '音色库已是最新') } catch (e: any) { toast.error(e.message) } }}>同步音色</Button>}
-                    {(p.provider === 'qwen' || p.provider === 'aliyun') && <Button size="xs" variant="ghost" onClick={async () => {
+                    {p.kind === 'tts' && (p.provider === 'qwen' || p.provider === 'aliyun') && <Button size="xs" variant="ghost" onClick={async () => {
                       if (!(await confirm({ title: '导入基础音色试听音频？', description: '将从千问官方下载约 200 MB 的试听音频包，为 600 个基础音色配上试听，后台执行，约需几分钟。系统音色的试听已直接使用官方链接。', confirmText: '开始导入' }))) return
                       const j = await adminApi.post(`/providers/${p.id}/import-previews`, {})
                       toast.success('已开始导入，可在「任务队列」查看进度', { description: j?.title })
@@ -79,6 +79,10 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
   const isQwen = f.kind === 'tts' && (f.provider === 'qwen' || f.provider === 'aliyun')
   const isOpenAIImage = f.kind === 'image' && f.provider === 'openai_image'
   const isGeminiImage = f.kind === 'image' && f.provider === 'gemini_image'
+  const isVolcAudio = f.provider === 'volcengine_audio'
+  const isVolcASR = f.kind === 'asr' && f.provider === 'volcengine'
+  const isQwenASR = f.kind === 'asr' && (f.provider === 'qwen' || f.provider === 'aliyun')
+  const perMinute = isVolcAudio || f.provider === 'elevenlabs_sfx'
   const modelOptions = (f.modelsText as string).split('\n').map((s) => s.trim()).filter(Boolean)
   const save = async () => {
     setBusy(true)
@@ -115,11 +119,11 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
           )}
           <Field label="接口地址（Base URL）" className="col-span-2" hint={isSuno ? '支持 Suno 的 New API / One API 中转服务的根地址，例如 https://relay.example.com，不要带 /v1' : undefined}><Input value={f.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} placeholder={isSuno ? 'https://relay.example.com' : undefined} className="font-mono text-[12.5px]" /></Field>
           <Field label="API Key" className="col-span-2" hint={value?.id ? `当前 ••••${value.keyLast4}，留空则不修改` : '加密保存'}><Input type="password" value={f.apiKey} onChange={(e) => set('apiKey', e.target.value)} autoComplete="off" /></Field>
-          <Field label="默认模型" hint={isMiniMax ? 'HD 音质最好，Turbo 更快更便宜；音色库里的音色自带模型' : undefined}><SuggestInput value={f.model} onChange={(v) => set('model', v)} suggestions={modelOptions} className="font-mono text-[12.5px]" /></Field>
+          <Field label="默认模型" hint={isMiniMax ? 'HD 音质最好，Turbo 更快更便宜；音色库里的音色自带模型' : isVolcASR ? 'volc.seedasr.auc 是 2.0（推荐），volc.bigasr.auc 是 1.0' : isQwenASR ? '都返回逐字时间戳。qwen-audio-3.1-asr-flash 会自动润色（去掉语气词和重复），配音自检想严格核对口误和重复时可改用 qwen-audio-3.0-asr-flash' : undefined}><SuggestInput value={f.model} onChange={(v) => set('model', v)} suggestions={modelOptions} className="font-mono text-[12.5px]" /></Field>
           <Field label="优先级" hint="同类账号中数字大的优先使用"><Input type="number" value={f.priority} onChange={(e) => set('priority', e.target.value)} /></Field>
           <Field label="每分钟请求上限" hint={isMiniMax ? '充值用户 20，免费用户 10；超出会自动排队' : undefined}><Input type="number" value={f.rpm} onChange={(e) => set('rpm', e.target.value)} /></Field>
           <Field label="并发上限"><Input type="number" value={f.concurrency} onChange={(e) => set('concurrency', e.target.value)} /></Field>
-          <Field label="成本（元 / 单位）" hint={isLLM ? '每千 token' : f.kind === 'tts' ? '每千字' : f.kind === 'asr' ? '每分钟' : f.kind === 'image' ? '每张图' : '每次'} className="col-span-2"><Input type="number" step="0.0001" value={f.costPerUnit} onChange={(e) => set('costPerUnit', e.target.value)} /></Field>
+          <Field label="成本（元 / 单位）" hint={isLLM ? '每千 token' : perMinute ? '每分钟音频（按实际生成的时长计）' : f.kind === 'tts' ? '每千字' : f.kind === 'asr' ? '每分钟' : f.kind === 'image' ? '每张图' : '每次'} className="col-span-2"><Input type="number" step="0.0001" value={f.costPerUnit} onChange={(e) => set('costPerUnit', e.target.value)} /></Field>
           <Field label="可选模型列表" hint="每行一个，路由规则可以按功能指定" className="col-span-2"><Textarea rows={3} value={f.modelsText} onChange={(e) => set('modelsText', e.target.value)} className="font-mono text-[12.5px]" /></Field>
         </div>
         {isSuno && (
@@ -195,6 +199,34 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
               <Field label="超时（秒）" hint="默认 300"><Input type="number" value={f.config.timeoutSec ?? ''} onChange={(e) => setC('timeoutSec', e.target.value ? Number(e.target.value) : '')} /></Field>
             </div>
             <p className="mt-3 text-[12px] text-muted">「测试」只核对密钥和模型，不会生成图片，也不产生费用。密钥在 Google AI Studio 创建；服务器所在地区需要在 Gemini API 的支持范围内，否则请填中转地址。</p>
+          </Panel>
+        )}
+        {(isVolcAudio || isVolcASR) && (
+          <Panel title={isVolcASR ? '火山引擎录音文件识别设置' : f.kind === 'sfx' ? '火山引擎音效设置' : '火山引擎音频生成设置'} description="不确定时保持默认即可。">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="App ID（旧版控制台）" className="col-span-2" hint="新版控制台创建的 API Key 不需要填；旧版控制台账号在这里填 App ID，上面的 API Key 改填 Access Token"><Input value={f.config.appId ?? ''} onChange={(e) => setC('appId', e.target.value.trim())} className="font-mono text-[12.5px]" /></Field>
+              {isVolcAudio && f.kind === 'tts' && <>
+                <Field label="采样率"><Select value={String(f.config.sampleRate ?? '')} onChange={(v) => setC('sampleRate', v ? Number(v) : '')} options={[['', '44.1 kHz（默认）'], ['48000', '48 kHz'], ['32000', '32 kHz'], ['24000', '24 kHz']]} /></Field>
+                <Field label="单次最多字数" hint="更长的段落按句拆开分几次生成再拼接（一次最多 2 分钟音频）"><Input type="number" min={50} max={1000} value={f.config.maxChars ?? ''} placeholder="280" onChange={(e) => setC('maxChars', e.target.value ? Number(e.target.value) : '')} /></Field>
+                <div className="col-span-2"><Switch checked={f.config.pureVoice !== false} onChange={(v) => setC('pureVoice', v ? '' : false)} label="只生成人声：提示模型不要加背景音乐和音效（配乐和音效由本站混音）" /></div>
+              </>}
+              {isVolcAudio && f.kind === 'sfx' && <div className="col-span-2"><Switch checked={f.config.sfxOnly !== false} onChange={(v) => setC('sfxOnly', v ? '' : false)} label="只生成音效：描述里没写对白或音乐时，提示模型不要人声和背景音乐" /></div>}
+              {isVolcASR && <>
+                <Field label="最长等待（分钟）" hint="超过后这次识别记为失败"><Input type="number" min={1} value={f.config.maxWaitMinutes ?? ''} placeholder="30" onChange={(e) => setC('maxWaitMinutes', e.target.value ? Number(e.target.value) : '')} /></Field>
+                <div className="col-span-2"><Switch checked={!!f.config.enableDDC} onChange={(v) => setC('enableDDC', v ? true : '')} label="语义顺滑：去掉“嗯、啊”和重复的词（审听要找出读错、重复时建议关闭）" /></div>
+              </>}
+            </div>
+            <p className="mt-3 text-[12px] leading-relaxed text-muted">
+              点「测试」只核对密钥，不会{isVolcASR ? '识别音频' : '生成音频'}，也不产生费用。
+              {isVolcASR && '识别时火山引擎会从本站下载音频，所以 VB_PUBLIC_URL 必须是公网可以访问的地址；配置了对象存储时音频改从对象存储下载。'}
+              {isVolcAudio && f.kind === 'tts' && '克隆和设计出来的音色以参考录音的形式保存在本站，生成时随请求发送。'}
+            </p>
+          </Panel>
+        )}
+        {isQwenASR && (
+          <Panel title="千问语音识别设置" description="音频随请求直接上传，不需要公网地址。">
+            <Field label="业务空间 ID（可选）" hint="只有在千问 AI 平台使用了子业务空间时才需要"><Input value={f.config.workspace ?? ''} onChange={(e) => setC('workspace', e.target.value.trim())} className="font-mono text-[12.5px]" /></Field>
+            <p className="mt-3 text-[12px] text-muted">点「测试」只核对密钥和模型，不会识别音频，也不产生费用。可以和千问语音合成使用同一个 API Key。</p>
           </Panel>
         )}
         {isLLM && (

@@ -315,6 +315,9 @@ func (a *App) DesignOptions(studioID string) DesignOption {
 		o.ModelLabel = tts.ModelLabel(tts.QwenDesignModelFor(acc.Config.V))
 		o.KeepHours = int(designKeep.Hours())
 	}
+	if acc.Provider == "volcengine_audio" {
+		o.KeepHours = int(designKeep.Hours())
+	}
 	return o
 }
 
@@ -492,7 +495,7 @@ type CloneOption struct {
 	ModelLabel    string `json:"modelLabel,omitempty"` // model new clones are bound to, when the platform binds them
 }
 
-var platformNames = map[string]string{"minimax": "MiniMax", "qwen": "千问", "aliyun": "千问", "placeholder": "内置演示引擎", "elevenlabs": "ElevenLabs", "volcengine": "火山引擎"}
+var platformNames = map[string]string{"minimax": "MiniMax", "qwen": "千问", "aliyun": "千问", "placeholder": "内置演示引擎", "elevenlabs": "ElevenLabs", "volcengine": "火山引擎", "volcengine_audio": "火山引擎"}
 
 // CloneOptions resolves the platform used for quick and professional cloning in a studio.
 func (a *App) CloneOptions(studioID string) map[string]CloneOption {
@@ -849,8 +852,8 @@ func (a *App) SyncProviderVoices(ctx context.Context, acc *model.ProviderAccount
 	switch provider {
 	case "aliyun", "qwen":
 		provider, accID = "qwen", "" // Qianwen voices route to any enabled Qianwen account
-	case "minimax":
-		accID = "" // system voices work on every MiniMax account
+	case "minimax", "volcengine_audio":
+		accID = "" // system voices work on every account of the platform
 	}
 	defer a.InvalidateTTSProviders()
 	return a.UpsertCatalogVoices(provider, accID, list)

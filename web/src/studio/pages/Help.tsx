@@ -72,7 +72,7 @@ function HelpHome() {
             <article key={a.id} className="border-l-2 border-line pl-5">
               <div className="flex items-center gap-2 text-xs text-faint">{a.version && <Badge tone="accent">{a.version}</Badge>}{date(a.createdAt)}</div>
               <h3 className="mt-1 text-[15px] font-semibold">{a.title}</h3>
-              <div className="prose-help mt-2 text-[13.5px]"><ReactMarkdown remarkPlugins={[remarkGfm]}>{a.body}</ReactMarkdown></div>
+              <div className="prose-help mt-2 text-[13.5px]"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{a.body}</ReactMarkdown></div>
             </article>
           ))}
           {!data?.length && <Empty icon={<Sparkles />} title="暂无更新日志" />}
@@ -84,17 +84,20 @@ function HelpHome() {
   )
 }
 
+/** Wide tables scroll inside their own box instead of squeezing their columns. */
+const mdComponents = { table: (p: any) => <div className="md-table"><table {...p} /></div> }
+
 function Article() {
   const { id } = useParams()
   const { data } = useQuery({ queryKey: ['article', id], queryFn: () => api.get(`/articles/${id}`) })
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto max-w-[920px] sm:px-2 lg:px-6">
       <Link to="/help" className="mb-4 inline-flex items-center gap-1 text-[13px] text-muted hover:text-ink"><ChevronLeft className="size-4" />帮助中心</Link>
       {!data ? <Skeleton className="h-60" /> : (
         <article>
           <p className="text-xs text-faint">{data.category}</p>
           <h1 className="mt-1 font-serif text-[28px] font-semibold leading-tight tracking-[0.01em]">{data.title}</h1>
-          <div className="prose-help mt-6 text-[14.5px] leading-[1.85]"><ReactMarkdown remarkPlugins={[remarkGfm]}>{data.body}</ReactMarkdown></div>
+          <div className="prose-help prose-doc mt-8 text-[15px] leading-[1.9]"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{data.body}</ReactMarkdown></div>
           <div className="mt-10 rounded-panel border border-line bg-surface px-5 py-4 text-[13px] text-muted">没有解决你的问题？在右上角「意见反馈」告诉我们，通常一个工作日内回复。</div>
           <div className="mt-4 text-[12.5px] text-muted">协议与政策：<LegalLinks all /></div>
         </article>

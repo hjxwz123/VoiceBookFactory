@@ -63,10 +63,15 @@
   --shadow-lift: 0 14px 34px -16px rgb(28 26 22 / 0.24), 0 3px 8px -4px rgb(28 26 22 / 0.08);
   /* behind dialogs: warm ink, not blue-black */
   --scrim: rgb(26 24 20 / 0.42);
+  /* chart series: 黛蓝 and amber, stepped for the chart surface (checked for colour-blind separation) */
+  --chart-1: #3b63b5;
+  --chart-2: #c47c14;
   color-scheme: light;
 }
 
 .dark {
+  --chart-1: #5f87d4;
+  --chart-2: #c4862a;
   --bg: #141413;
   --surface: #1c1c1a;
   --sunken: #101010;
@@ -167,7 +172,28 @@ html:not(.vt-theme)::view-transition-new(root) { animation: vt-enter 0.56s cubic
 .prose-help pre { background: var(--sunken); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-help pre code { background: none; padding: 0; font-size: inherit; }
 .prose-help table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; display: block; overflow-x: auto; }
+.prose-help .md-table { margin: 14px 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.prose-help .md-table table { display: table; margin: 0; }
+.prose-help .md-table tr:last-child td { border-bottom: 0; }
 .prose-help th, .prose-help td { border-bottom: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+.prose-help .md-table th, .prose-help .md-table td { padding: 10px 16px; }
+.prose-help .md-table td code { white-space: nowrap; }
+/* long documents (guides, the open API reference) */
+.prose-doc h2 { font-size: 19px; margin: 40px 0 12px; padding-top: 8px; font-family: var(--font-serif, inherit); }
+.prose-doc h3 { font-size: 15.5px; margin: 28px 0 8px; }
+.prose-doc p, .prose-doc li { margin: 8px 0; }
+.prose-doc pre { padding: 16px 20px; border-radius: 12px; margin: 14px 0; font-size: 13px; line-height: 1.7; }
+.prose-doc code { padding: 2px 6px; }
+.prose-doc table { font-size: 13.5px; }
+/* announcements written by administrators (Markdown or HTML) */
+.prose-ann { color: var(--ink); }
+.prose-ann p, .prose-ann li { color: color-mix(in oklab, var(--ink) 82%, transparent); margin: 6px 0; }
+.prose-ann > :first-child { margin-top: 0; }
+.prose-ann > :last-child { margin-bottom: 0; }
+.prose-ann img { max-width: 100%; height: auto; border-radius: 10px; margin: 10px 0; }
+.prose-ann h1, .prose-ann h2 { font-size: 16px; font-weight: 650; margin: 14px 0 6px; color: var(--ink); }
+.prose-ann hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.prose-ann-inline, .prose-ann-inline p { display: inline; margin: 0; }
 .prose-help th { color: var(--ink); font-weight: 600; background: var(--sunken); white-space: nowrap; }
 .prose-help td { color: var(--muted); }
 .prose-help blockquote { border-left: 3px solid var(--line-strong); padding-left: 12px; margin: 10px 0; }

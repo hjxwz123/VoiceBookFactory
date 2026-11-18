@@ -16,7 +16,7 @@ export function Ledger() {
     <div>
       <PageHeader title="积分流水" description="所有工作室的积分变动记录。" />
       <div className="mb-4 flex flex-wrap gap-3">
-        <Select size="sm" value={kind} onChange={(v) => { setKind(v); setPage(1) }} options={[['', '全部类型'], ['grant', '发放'], ['consume', '消耗'], ['refund', '退回'], ['expire', '过期'], ['admin', '人工调整'], ['promo', '兑换码'], ['market_income', '市场收入']]} className="w-32" />
+        <Select size="sm" value={kind} onChange={(v) => { setKind(v); setPage(1) }} options={[['', '全部类型'], ['grant', '发放'], ['consume', '消耗'], ['refund', '退回'], ['expire', '过期'], ['admin', '人工调整'], ['promo', '兑换码'], ['market_income', '市场收入'], ['referral', '邀请奖励'], ['signup', '注册赠送']]} className="w-32" />
         <Select size="sm" value={feature} onChange={(v) => { setFeature(v); setPage(1) }} options={[['', '全部功能'], ...Object.entries(featureName)]} className="w-32" />
         <Input value={studioId} onChange={(e) => { setStudioId(e.target.value); setPage(1) }} placeholder="工作室 ID" className="!h-8 w-72 font-mono text-xs" />
       </div>

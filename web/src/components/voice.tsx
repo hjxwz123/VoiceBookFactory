@@ -34,6 +34,7 @@ export const voiceModels: [string, string][] = [
   ['cosyvoice-v2', 'CosyVoice v2'],
   ['speech-2.8-hd', 'MiniMax 2.8 HD'],
   ['speech-2.8-turbo', 'MiniMax 2.8 Turbo'],
+  ['seed-audio-1.0', '豆包音频生成（火山引擎）'],
   ['placeholder', '内置演示引擎'],
 ]
 

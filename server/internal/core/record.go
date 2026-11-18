@@ -56,7 +56,7 @@ func (a *App) SaveRecordedTake(ctx context.Context, x *Access, s *model.Segment,
 	hints := map[string]any{"durationMs": asset.DurationMs, "rmsDb": stats.RMSDB, "noiseDb": stats.NoiseFloorDB, "clipped": stats.ClippedSamples, "tips": recordingTips(stats)}
 	// quick text check when ASR is configured
 	if prov, _, err := a.ASRFor(x.StudioID); err == nil {
-		if res, err := prov.Transcribe(ctx, out, x.Book.Language); err == nil {
+		if res, err := a.transcribeClip(ctx, prov, out, x.Book.Language, asset.DurationMs); err == nil {
 			_, score := align.Compare(s.Text, res.Text)
 			hints["heard"], hints["match"] = res.Text, score
 			if score < 0.8 {
@@ -142,6 +142,30 @@ func (a *App) CreateRecording(x *Access, ch *model.Chapter, assetIDs []string, m
 	return r, nil
 }
 
+// transcribeClip recognizes one clip (a generated or recorded line). A clip longer or larger than the service
+// takes in one request (千问: 5 minutes, 10 MB; a two-minute WAV is already over 10 MB) is cut and re-encoded
+// first, instead of the request failing and the check being skipped.
+func (a *App) transcribeClip(ctx context.Context, prov asr.Provider, path, lang string, durationMs int64) (*asr.Result, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	big := prov.MaxBytes() > 0 && st.Size() > prov.MaxBytes()
+	long := durationMs > asr.ChunkMs(prov, 9*60*1000)
+	if !big && !long {
+		return prov.Transcribe(ctx, path, lang)
+	}
+	words, text, err := a.transcribeLong(ctx, prov, path, lang, nil)
+	if err != nil {
+		return nil, err
+	}
+	res := &asr.Result{Text: text}
+	for _, w := range words {
+		res.Words = append(res.Words, asr.Word{Text: w.Text, StartMs: w.StartMs, EndMs: w.EndMs})
+	}
+	return res, nil
+}
+
 // transcribeLong splits long audio into chunks the ASR service accepts and offsets timestamps.
 func (a *App) transcribeLong(ctx context.Context, prov asr.Provider, path, lang string, progress func(float64)) ([]align.Word, string, error) {
 	info, err := a.FF.Probe(ctx, path)
@@ -153,7 +177,7 @@ func (a *App) transcribeLong(ctx context.Context, prov asr.Provider, path, lang 
 		return nil, "", err
 	}
 	defer os.RemoveAll(dir)
-	const chunk = int64(9 * 60 * 1000)
+	chunk := asr.ChunkMs(prov, 9*60*1000) // some services take only a few minutes per request
 	var words []align.Word
 	var full strings.Builder
 	n := int((info.DurationMs + chunk - 1) / chunk)

@@ -3,8 +3,10 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   AudioLines, Bell, BookOpen, Boxes, Check, ChevronsUpDown, CircleHelp, Command, Crown, FileText, Gauge, KanbanSquare, ListChecks, LogOut, Menu as MenuIcon, Mic2, Monitor, Moon, Plus,
   Search, Settings, Sparkles, Sun, User, UserRound, Wand2, Zap,
+  Gift,
 } from '@/components/icons'
 import { Suspense, useEffect, useState } from 'react'
+import { AnnouncementHost } from '@/components/announcement'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { fromNow, num } from '@/lib/format'
@@ -114,6 +116,7 @@ export default function Shell() {
             </Suspense>
           </Fade>
         </main>
+        <AnnouncementHost />
       </div>
       <SearchPalette open={palette} onOpenChange={setPalette} />
       <MiniPlayerBar />
@@ -122,6 +125,7 @@ export default function Shell() {
 }
 
 function Sidebar() {
+  const site = useSession((s) => s.site) as any
   return (
     <>
       <div className="flex h-14 items-center gap-2.5 px-5">
@@ -151,6 +155,11 @@ function Sidebar() {
         <NavLink to="/membership" className={({ isActive }) => cn('flex h-9 items-center gap-2.5 rounded-[8px] px-3 text-[13.5px]', isActive ? 'bg-sunken text-ink' : 'text-muted hover:bg-sunken hover:text-ink')}>
           <Crown className="size-[17px] text-warn" strokeWidth={1.8} /> 会员中心
         </NavLink>
+        {site?.referral && (
+          <NavLink to="/referral" className={({ isActive }) => cn('flex h-9 items-center gap-2.5 rounded-[8px] px-3 text-[13.5px]', isActive ? 'bg-sunken text-ink' : 'text-muted hover:bg-sunken hover:text-ink')}>
+            <Gift className="size-[17px]" strokeWidth={1.8} /> 邀请好友
+          </NavLink>
+        )}
         <NavLink to="/studio" className={({ isActive }) => cn('flex h-9 items-center gap-2.5 rounded-[8px] px-3 text-[13.5px]', isActive ? 'bg-sunken text-ink' : 'text-muted hover:bg-sunken hover:text-ink')}>
           <Settings className="size-[17px]" strokeWidth={1.8} /> 工作室设置
         </NavLink>

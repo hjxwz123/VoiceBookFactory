@@ -742,7 +742,7 @@ function Pricing({ plans, g, authed, contact }: { plans: Plan[]; g: Guide; authe
 const FAQ: [string, string][] = [
   ['需要会配音或剪辑吗？', '不需要。上传书稿后，拆章、分析角色、选角、标注画本、配音和合成都可以交给 AI；想精修时再进制作台逐句调整。'],
   ['书稿的版权谁负责？', '平台只提供制作工具，不审查也不保证任何内容的版权。书稿须是你的原创、已取得有声改编授权，或已进入公有领域；因版权产生的纠纷由使用者自行承担。'],
-  ['用的是哪些 AI 模型？', '大语言模型支持 OpenAI、Claude 和兼容协议的服务（如 DeepSeek、通义千问）；语音合成接入了千问和 MiniMax。具体使用哪些由平台管理员配置。'],
+  ['用的是哪些 AI 模型？', '大语言模型支持 OpenAI、Claude 和兼容协议的服务（如 DeepSeek、通义千问）；语音合成接入了千问、MiniMax 和火山引擎豆包音频生成，语音识别接入了千问和火山引擎。具体使用哪些由平台管理员配置。'],
   ['做出来的声音可以商用吗？', '个人版及以上包含精品音色和商用授权；免费版用于体验，不含商用授权。发布到平台时请按平台要求标注 AI 生成。'],
   ['积分是怎么算的？', '画本和配音按字数计算，设计音色、克隆按次数，对轨和审听按音频时长。开始生成前都会显示预计消耗；相同内容重复生成命中缓存，不扣积分。'],
   ['人名、多音字读错了怎么办？', '在「读音」里定好读法，全书统一生效；已经配好的相关句子会标为有改动，一键重新生成。每句话还有 2 次免费重新生成。'],
@@ -892,7 +892,7 @@ export default function Landing() {
   const plans = plansQ.data?.length ? plansQ.data : FALLBACK_PLANS
   const g = guideQ.data?.per10kChars?.standard ? guideQ.data : FALLBACK_GUIDE
   const free = plans.find((p) => p.code === 'free') ?? plans[0]
-  const canRegister = site?.registrationOpen !== false && !site?.inviteOnly
+  const canRegister = site?.registrationOpen !== false // with registration codes required, the sign-up page asks for one
   const authed = !!user
   const action = authed ? { to: '/', label: '进入工作台' } : canRegister ? { to: '/register', label: '免费开始' } : { to: '/login', label: '登录' }
   const [ink, setInk] = useState(false)

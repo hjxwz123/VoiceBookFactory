@@ -4,6 +4,7 @@ import { ArrowUpRight, BookOpen, CheckCircle2, Circle, Megaphone, Plus, Upload, 
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { AnnouncementBody, dismissAnnouncement } from '@/components/announcement'
 import { duration, fromNow, num, taskStatusName } from '@/lib/format'
 import { useLive } from '@/lib/live'
 import { useSession, useStudio } from '@/lib/session'
@@ -41,17 +42,19 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {(ann.data ?? []).filter((a: any) => !dismissed.includes(a.id)).slice(0, 1).map((a: any) => (
-        <div key={a.id} className="flex items-start gap-3 rounded-panel border border-line bg-surface px-4 py-3">
-          <Megaphone className="mt-0.5 size-4 shrink-0 text-accent" />
+      {(ann.data ?? []).filter((a: any) => a.kind !== 'modal' && !dismissed.includes(a.id)).slice(0, 1).map((a: any) => (
+        <div key={a.id} className={cn('flex items-start gap-3 rounded-panel border bg-surface px-4 py-3', a.level === 'danger' ? 'border-danger/40' : a.level === 'warning' ? 'border-warn/40' : 'border-line')}>
+          <Megaphone className={cn('mt-0.5 size-4 shrink-0', a.level === 'danger' ? 'text-danger' : a.level === 'warning' ? 'text-warn' : 'text-accent')} />
           <div className="min-w-0 flex-1 text-[13px]">
             <span className="font-medium">{a.title}</span>
-            <span className="ml-2 text-muted">{a.body}</span>
+            {a.body && <AnnouncementBody a={a} inline className="ml-2 text-muted" />}
+            {a.link && (/^https?:\/\//.test(a.link) ? <a href={a.link} target="_blank" rel="noopener noreferrer" className="ml-2 font-medium text-accent hover:underline">{a.linkText || '查看详情'}</a> : <Link to={a.link} className="ml-2 font-medium text-accent hover:underline">{a.linkText || '查看详情'}</Link>)}
           </div>
           <button className="text-faint hover:text-ink" onClick={() => {
             const d = [...dismissed, a.id]
             setDismissed(d)
             localStorage.setItem('vb-ann', JSON.stringify(d))
+            dismissAnnouncement(a.id)
           }} aria-label="关闭"><X className="size-4" /></button>
         </div>
       ))}

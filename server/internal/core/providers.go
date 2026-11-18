@@ -145,7 +145,7 @@ func truncateStr(s string, n int) string {
 
 // ttsAccount converts a stored account into adapter settings.
 func (a *App) ttsAccount(acc *model.ProviderAccount) tts.Account {
-	return tts.Account{Provider: acc.Provider, BaseURL: acc.BaseURL, APIKey: a.accountKey(acc), Model: acc.Model, Config: acc.Config.V, RPM: acc.RPM}
+	return tts.Account{Provider: acc.Provider, BaseURL: acc.BaseURL, APIKey: a.accountKey(acc), Model: acc.Model, Config: acc.Config.V, RPM: acc.RPM, Refs: a.refStore()}
 }
 
 // TTSFor returns the synthesis provider for a voice.
@@ -189,8 +189,12 @@ func (a *App) ASRFor(studioID string) (asr.Provider, *model.ProviderAccount, err
 	if err != nil {
 		return nil, nil, &Error{Status: 503, Code: "asr_not_configured", Msg: "平台尚未配置语音识别服务（ASR），智能对轨与文本审听不可用。请管理员在「AI 供应商」中添加。"}
 	}
-	p, err := asr.New(asr.Account{Provider: acc.Provider, BaseURL: acc.BaseURL, APIKey: a.accountKey(acc), Model: acc.Model, Config: acc.Config.V})
+	p, err := asr.New(a.asrAccount(acc))
 	return p, acc, err
+}
+
+func (a *App) asrAccount(acc *model.ProviderAccount) asr.Account {
+	return asr.Account{Provider: acc.Provider, BaseURL: acc.BaseURL, APIKey: a.accountKey(acc), Model: acc.Model, Config: acc.Config.V, Publish: a.publishTemp}
 }
 
 func (a *App) genAccount(kind, studioID string) (*model.ProviderAccount, bool, error) {
@@ -236,13 +240,21 @@ func (a *App) TestAccount(ctx context.Context, acc *model.ProviderAccount) (stri
 		var p tts.Provider
 		p, err = tts.New(a.ttsAccount(acc))
 		if err == nil {
-			_, err = p.Synthesize(ctx, tts.SynthesizeRequest{Text: "连接测试", Speed: 1})
-			if err == nil {
+			if c, ok := p.(tts.Checker); ok { // every synthesis is billed by the second: check the key instead
+				msg, err = c.Check(ctx)
+			} else if _, err = p.Synthesize(ctx, tts.SynthesizeRequest{Text: "连接测试", Speed: 1}); err == nil {
 				msg = "语音合成连接正常"
 			}
 		}
 	case model.KindASR:
-		msg = "语音识别账号已保存；将在首次对轨或审听时验证"
+		var p asr.Provider
+		if p, err = asr.New(a.asrAccount(acc)); err == nil {
+			if c, ok := p.(asr.Checker); ok {
+				msg, err = c.Check(ctx)
+			} else {
+				msg = "语音识别账号已保存；将在首次对轨或审听时验证"
+			}
+		}
 	default:
 		switch acc.Kind {
 		case model.KindImage:
@@ -266,7 +278,11 @@ func (a *App) TestAccount(ctx context.Context, acc *model.ProviderAccount) (stri
 		case model.KindSFX:
 			var p gen.SFXProvider
 			if p, err = gen.NewSFX(a.genAcc(acc)); err == nil {
-				_, err = p.GenerateSFX(ctx, gen.SFXRequest{Prompt: "test", DurationMs: 1000})
+				if c, ok := p.(gen.Checker); ok { // a real generation is billed by the second; check the key instead
+					msg, err = c.Check(ctx)
+				} else {
+					_, err = p.GenerateSFX(ctx, gen.SFXRequest{Prompt: "test", DurationMs: 1000})
+				}
 			}
 		}
 		if err == nil && msg == "" {

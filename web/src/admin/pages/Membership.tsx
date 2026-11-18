@@ -313,7 +313,7 @@ const dayPresets: [number, string][] = [[7, '7 天'], [30, '30 天'], [90, '90 �
 function CreateBatch({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
   const plans = useAdmin<any>('/plans', { pageSize: 100 }, { enabled: open })
   const paid: Plan[] = (plans.data?.items ?? []).filter((p: Plan) => p.level > 0)
-  const init = { name: '', kind: 'membership', planId: '', days: 30, credits: 10000, creditDays: 365, mode: 'unique', count: 100, code: '', maxUses: 0, perUserLimit: 1, newUsersOnly: false, prefix: '', startsAt: '', expiresAt: '', channel: '', note: '' }
+  const init = { name: '', kind: 'membership', planId: '', days: 30, credits: 10000, creditDays: 365, mode: 'unique', count: 100, code: '', maxUses: 0, perUserLimit: 1, newUsersOnly: false, prefix: '', startsAt: '', expiresAt: '', channel: '', note: '', price: '' }
   const [f, setF] = useState<any>(init)
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<any>(null)
@@ -332,11 +332,11 @@ function CreateBatch({ open, onClose, onCreated }: { open: boolean; onClose: () 
   const summary = f.mode === 'unique'
     ? `将生成 ${num(f.count)} 个兑换码，每个可兑换 ${content}`
     : `通用码 ${f.code ? f.code.toUpperCase() : '……'} 可兑换 ${content}${f.maxUses ? `，共 ${num(f.maxUses)} 份` : '，不限份数'}`
-  const rules = [f.perUserLimit ? `每人限 ${f.perUserLimit} 次` : '每人不限次数', f.newUsersOnly && '仅限未开通过会员的用户', f.startsAt && `${f.startsAt.replace('T', ' ')} 开始`, f.expiresAt ? `${f.expiresAt.replace('T', ' ')} 截止` : '长期有效'].filter(Boolean).join('，')
+  const rules = [Number(f.price) > 0 && `售价 ${Number(f.price).toFixed(2)} 元`, f.perUserLimit ? `每人限 ${f.perUserLimit} 次` : '每人不限次数', f.newUsersOnly && '仅限未开通过会员的用户', f.startsAt && `${f.startsAt.replace('T', ' ')} 开始`, f.expiresAt ? `${f.expiresAt.replace('T', ' ')} 截止` : '长期有效'].filter(Boolean).join('，')
   const submit = async () => {
     setBusy(true)
     try {
-      const body = { ...f, startsAt: f.startsAt ? new Date(f.startsAt).toISOString() : null, expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null }
+      const body = { ...f, priceCents: Math.round((Number(f.price) || 0) * 100), startsAt: f.startsAt ? new Date(f.startsAt).toISOString() : null, expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null }
       if (!body.name.trim()) body.name = f.kind === 'membership' ? `${plan?.name ?? '会员'} ${f.days ? f.days + ' 天' : '永久'}` : `${num(f.credits)} 积分`
       const b = await adminApi.post('/redeem-batches', body)
       ainv(['/redeem-batches'])
@@ -408,6 +408,9 @@ function CreateBatch({ open, onClose, onCreated }: { open: boolean; onClose: () 
               <Field label="截止时间" hint="过期后不能再兑换"><DateInput time value={f.expiresAt} onChange={(v) => set('expiresAt', v)} placeholder="长期有效" /></Field>
             </div>
             <Switch checked={f.newUsersOnly} onChange={(v) => set('newUsersOnly', v)} label="仅限从未开通过会员的用户（拉新活动）" />
+            <Field label="每个码的售价" hint="通过网店或代理商卖出的码填实际售价：用户兑换时记为一笔充值，邀请人按「邀请返利」规则获得返利。赠送的码留空">
+              <div className="relative w-40"><Input type="number" min={0} step="0.01" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="0" className="pr-8" /><span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-faint">元</span></div>
+            </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="批次名称" hint="留空自动生成"><Input value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="例如 双十一直播间" /></Field>
               <Field label="渠道" hint="用于统计各渠道的兑换效果"><Input value={f.channel} onChange={(e) => set('channel', e.target.value)} placeholder="例如 小红书、合作书城" /></Field>
@@ -568,7 +571,7 @@ export function UserMembership({ userId }: { userId: string }) {
   const plans = useAdmin<any>('/plans', { pageSize: 100 })
   const paid: Plan[] = (plans.data?.items ?? []).filter((p: Plan) => p.level > 0)
   const [grant, setGrant] = useState(false)
-  const [g, setG] = useState({ planId: '', days: 30, note: '' })
+  const [g, setG] = useState<{ planId: string; days: number; note: string; paidYuan?: number }>({ planId: '', days: 30, note: '' })
   if (!v) return null
   return (
     <Panel title="会员" actions={<Button size="xs" variant="primary" icon={<Crown className="size-3.5" />} onClick={() => { setG({ planId: paid[0]?.id ?? '', days: 30, note: '' }); setGrant(true) }}>开通 / 续期</Button>}>
@@ -612,6 +615,7 @@ export function UserMembership({ userId }: { userId: string }) {
             <Input type="number" min={0} className="mt-2" value={g.days} onChange={(e) => setG({ ...g, days: Number(e.target.value) })} />
           </Field>
           <Field label="原因" hint="记录到操作日志，例如 客诉补偿、合作赠送"><Input value={g.note} onChange={(e) => setG({ ...g, note: e.target.value })} /></Field>
+          <Field label="实收金额（元，选填）" hint="用户线下付款开通的，填写实际收到的钱：会记为一笔充值，邀请人按规则获得返利"><Input type="number" min={0} step="0.01" value={g.paidYuan ?? ''} onChange={(e) => setG({ ...g, paidYuan: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder="0" /></Field>
         </div>
       </Dialog>
     </Panel>

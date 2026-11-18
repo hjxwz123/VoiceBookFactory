@@ -176,7 +176,7 @@ func setProviders(t *testing.T, a *App, list ...OAuthProvider) {
 
 func login(t *testing.T, a *App, idp *fakeIdP, id string, agree bool, bindUser, session string) (*OAuthResult, error) {
 	t.Helper()
-	authURL, cookie, err := a.OAuthBegin(context.Background(), id, "/books", bindUser, agree)
+	authURL, cookie, err := a.OAuthBegin(context.Background(), id, "/books", bindUser, agree, SignupCodes{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestOIDCSignInSignUpAndLink(t *testing.T) {
 	a, idp := oauthTestApp(t)
 	setProviders(t, a, OAuthProvider{ID: "corp", Preset: "oidc", Name: "企业账号", Enabled: true, ClientID: "client-1", Issuer: idp.srv.URL, AllowSignup: true})
 
-	authURL, _, err := a.OAuthBegin(context.Background(), "corp", "/books", "", true)
+	authURL, _, err := a.OAuthBegin(context.Background(), "corp", "/books", "", true, SignupCodes{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,9 +256,9 @@ func TestOIDCSignInSignUpAndLink(t *testing.T) {
 func TestOAuthFlowIsBoundToTheBrowser(t *testing.T) {
 	a, idp := oauthTestApp(t)
 	setProviders(t, a, OAuthProvider{ID: "corp", Preset: "oidc", Enabled: true, ClientID: "client-1", Issuer: idp.srv.URL, AllowSignup: true})
-	authURL, cookie, _ := a.OAuthBegin(context.Background(), "corp", "/", "", true)
+	authURL, cookie, _ := a.OAuthBegin(context.Background(), "corp", "/", "", true, SignupCodes{})
 	state, code := idp.authorize(t, authURL)
-	_, otherCookie, _ := a.OAuthBegin(context.Background(), "corp", "/", "", true)
+	_, otherCookie, _ := a.OAuthBegin(context.Background(), "corp", "/", "", true, SignupCodes{})
 	for name, c := range map[string]struct{ cookie, state string }{
 		"no cookie":           {"", state},
 		"another flow":        {otherCookie, state},
@@ -349,7 +349,7 @@ func TestPlainOAuth2Provider(t *testing.T) {
 			t.Cleanup(func() { OAuthPresets[i].EmailsURL = old })
 		}
 	}
-	authURL, _, _ := a.OAuthBegin(context.Background(), "gh", "/", "", true)
+	authURL, _, _ := a.OAuthBegin(context.Background(), "gh", "/", "", true, SignupCodes{})
 	if !strings.Contains(authURL, "scope=read%3Auser+user%3Aemail") || strings.Contains(authURL, "nonce=") {
 		t.Fatalf("auth url %s", authURL)
 	}

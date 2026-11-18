@@ -140,6 +140,48 @@ AI 生成画本时不会改动原文，只做标注。在制作台里：
 2. **OpenAI Responses**
 3. **Anthropic Claude Messages**
 
+**语音合成**：已接入千问、MiniMax 和火山引擎豆包音频生成（Seed Audio）。
+
+- **火山引擎豆包音频生成**：用自然语言描述怎么说。每句台词的情绪、强度、表演标签和表演说明都会写进提示词，句中的大笑、叹气、咳嗽等标签按位置写成动作，句中的语气标签只影响它后面的部分。台词「音频」区每个版本旁的提示词按钮可以查看实际发送的内容。内置 469 个豆包 2.0 音色，点账号上的「同步音色」或重启后出现在音色库。
+- 它也支持「提示音」：用一段 30 秒以内的录音当参考音色。在这个平台上克隆或设计出来的音色以参考录音的形式保存在本站，每次生成时随请求发送，不用训练，也不会过期。
+- 单次最多生成 2 分钟音频，长段落会自动按句拆开再拼接。按生成时长收费，「成本单价」请填每分钟音频的成本（元）。
+- API Key 在火山引擎控制台的「API Key 管理」创建。旧版控制台的账号在账号配置里填 App ID，API Key 处填 Access Token。
+
+**语音识别**（智能对轨、智能审听、配音自检）：已接入千问、火山引擎和 OpenAI 兼容服务（Whisper）。
+
+- **千问语音识别**：默认模型 qwen-audio-3.1-asr-flash，返回逐字时间戳。音频随请求直接上传，不需要公网地址；每次最长 5 分钟、10 MB，更长或更大的音频会自动切段、压缩后再识别。可以和千问语音合成用同一个 API Key。qwen-audio-3.1-asr-flash 会自动润色识别结果（去掉语气词和重复），配音自检想严格核对口误和重复时，可以把模型改成 qwen-audio-3.0-asr-flash。
+- **火山引擎录音文件识别**：默认模型 volc.seedasr.auc（2.0）。火山引擎要从本站下载音频，所以 **VB_PUBLIC_URL 必须是公网能访问的地址**；识别时会生成一个 3 小时有效的临时链接，识别完立即删除。配置了对象存储时，音频改从对象存储下载。识别是异步的，一句话通常几秒到几十秒出结果。
+
+**图像生成**（AI 封面、角色头像）：已接入 OpenAI GPT Image 和 Google Nano Banana。没有接入时由内置生成器画抽象图，不能在封面上写书名。
+
+- **OpenAI GPT Image**：默认模型 gpt-image-2.6-flare。使用前要先在 OpenAI 后台完成组织验证（Organization Verification）。
+- **Google Nano Banana**：默认模型 gemini-nano-banana-2.1，密钥在 Google AI Studio 创建。服务器所在地区要在 Gemini API 的支持范围内，否则请填中转地址。
+
+**音效生成**（资产库里的「AI 生成 → 音效」）：已接入 ElevenLabs Sound Effects 和火山引擎豆包音频生成。
+
+火山引擎可以直接用中文描述，一次最长 2 分钟。用户还可以从资产库选最多 3 段音频当「提示音」，在描述里用 @音频1、@音频2 指代，例如「参考 @音频1 的雨声，加入远处的雷声」。每段只取前 30 秒。
+
+ElevenLabs 的默认模型是 eleven_text_to_sound_v3：
+
+- 密钥在 ElevenLabs 后台创建；如果给密钥设了权限，要勾选 Sound Effects。
+- 一次最长 30 秒，用户可以选「自动」让它按描述决定时长，也可以生成能无缝循环的环境声。
+- 中文描述会先由大模型改写成英文提示词，效果更稳定；不需要时在账号配置里加上「translate: false」。
+- ElevenLabs 按生成的秒数收费。「成本单价」请填每分钟音频的成本（元），数据看板里的 AI 成本按实际生成的时长计算。
+- 数据驻留在欧盟等地区的账号，把接口地址改成对应区域，例如 https://api.eu.residency.elevenlabs.io。
+
+选好预设、填写密钥后点 **测试**。图像、音效、语音识别和火山引擎音频生成账号的测试只核对密钥（ElevenLabs 会显示套餐和本期额度），不会生成或识别内容，也不产生费用。每张图、每个音效按「积分定价」里的价格向用户扣积分。`},
+}
+
+// helpSuperseded keeps built-in bodies that later releases replaced, so untouched copies still upgrade.
+var helpSuperseded = map[string][]string{
+	"配置 AI 模型": {`管理员在 **管理后台 → 模型与供应商** 中添加 AI 账号，每类服务一个页签。
+
+**大语言模型**（角色分析、画本、选角）支持三种协议：
+
+1. **OpenAI Chat Completions**：兼容 DeepSeek、通义千问、Kimi、GLM、Ollama 等
+2. **OpenAI Responses**
+3. **Anthropic Claude Messages**
+
 **语音合成**：已接入千问和 MiniMax。
 
 **图像生成**（AI 封面、角色头像）：已接入 OpenAI GPT Image 和 Google Nano Banana。没有接入时由内置生成器画抽象图，不能在封面上写书名。
@@ -147,12 +189,30 @@ AI 生成画本时不会改动原文，只做标注。在制作台里：
 - **OpenAI GPT Image**：默认模型 gpt-image-2.6-flare。使用前要先在 OpenAI 后台完成组织验证（Organization Verification）。
 - **Google Nano Banana**：默认模型 gemini-nano-banana-2.1，密钥在 Google AI Studio 创建。服务器所在地区要在 Gemini API 的支持范围内，否则请填中转地址。
 
-选好预设、填写密钥后点 **测试**。图像账号的测试只核对密钥和模型，不会生成图片，也不产生费用。每张图按「积分定价」里的 AI 封面价格向用户扣积分。`},
-}
+**音效生成**（资产库里的「AI 生成 → 音效」）：已接入 ElevenLabs Sound Effects，默认模型 eleven_text_to_sound_v3。
 
-// helpSuperseded keeps built-in bodies that later releases replaced, so untouched copies still upgrade.
-var helpSuperseded = map[string][]string{
-	"配置 AI 模型": {`管理员在 **管理后台 → 模型与供应商** 中添加大模型账号。支持三种协议：
+- 密钥在 ElevenLabs 后台创建；如果给密钥设了权限，要勾选 Sound Effects。
+- 一次最长 30 秒，用户可以选「自动」让它按描述决定时长，也可以生成能无缝循环的环境声。
+- 中文描述会先由大模型改写成英文提示词，效果更稳定；不需要时在账号配置里加上「translate: false」。
+- ElevenLabs 按生成的秒数收费。「成本单价」请填每分钟音频的成本（元），数据看板里的 AI 成本按实际生成的时长计算。
+- 数据驻留在欧盟等地区的账号，把接口地址改成对应区域，例如 https://api.eu.residency.elevenlabs.io。
+
+选好预设、填写密钥后点 **测试**。图像和音效账号的测试只核对密钥（音效账号会显示套餐和本期额度），不会生成内容，也不产生费用。每张图、每个音效按「积分定价」里的价格向用户扣积分。`, `管理员在 **管理后台 → 模型与供应商** 中添加 AI 账号，每类服务一个页签。
+
+**大语言模型**（角色分析、画本、选角）支持三种协议：
+
+1. **OpenAI Chat Completions**：兼容 DeepSeek、通义千问、Kimi、GLM、Ollama 等
+2. **OpenAI Responses**
+3. **Anthropic Claude Messages**
+
+**语音合成**：已接入千问和 MiniMax。
+
+**图像生成**（AI 封面、角色头像）：已接入 OpenAI GPT Image 和 Google Nano Banana。没有接入时由内置生成器画抽象图，不能在封面上写书名。
+
+- **OpenAI GPT Image**：默认模型 gpt-image-2.6-flare。使用前要先在 OpenAI 后台完成组织验证（Organization Verification）。
+- **Google Nano Banana**：默认模型 gemini-nano-banana-2.1，密钥在 Google AI Studio 创建。服务器所在地区要在 Gemini API 的支持范围内，否则请填中转地址。
+
+选好预设、填写密钥后点 **测试**。图像账号的测试只核对密钥和模型，不会生成图片，也不产生费用。每张图按「积分定价」里的 AI 封面价格向用户扣积分。`, `管理员在 **管理后台 → 模型与供应商** 中添加大模型账号。支持三种协议：
 
 1. **OpenAI Chat Completions**：兼容 DeepSeek、通义千问、Kimi、GLM、Ollama 等
 2. **OpenAI Responses**

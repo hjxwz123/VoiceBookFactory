@@ -333,8 +333,13 @@ func (s *Server) miscRoutes(r chi.Router) {
 				planCodes = append(planCodes, p.Code)
 			}
 		}
+		var closed []string
+		s.app.DB.Model(&model.AnnouncementDismissal{}).Where("user_id = ?", u.ID).Pluck("announcement_id", &closed)
 		var out []model.Announcement
 		for _, a := range list {
+			if containsStr(closed, a.ID) {
+				continue
+			}
 			aud := a.Audience.V
 			match := true
 			if pcs, ok := aud["planCodes"].([]any); ok && len(pcs) > 0 {
@@ -361,6 +366,16 @@ func (s *Server) miscRoutes(r chi.Router) {
 			out = []model.Announcement{}
 		}
 		return out, nil
+	}))
+	r.Post("/announcements/{id}/dismiss", h(func(r *http.Request) (any, error) {
+		var n int64
+		s.app.DB.Model(&model.Announcement{}).Where("id = ?", param(r, "id")).Count(&n)
+		if n == 0 {
+			return nil, core.NotFound("公告")
+		}
+		d := model.AnnouncementDismissal{AnnouncementID: param(r, "id"), UserID: userOf(r).ID}
+		s.app.DB.Where("announcement_id = ? AND user_id = ?", d.AnnouncementID, d.UserID).FirstOrCreate(&d)
+		return nil, nil
 	}))
 	r.Post("/feedback", h(func(r *http.Request) (any, error) {
 		var in model.Feedback

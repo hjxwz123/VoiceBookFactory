@@ -1,6 +1,7 @@
 // Package asr provides speech recognition with word timestamps, used by smart alignment and
-// smart review. The OpenAI-compatible adapter (/audio/transcriptions, verbose_json) is real and
-// works with OpenAI, Groq and self-hosted Whisper servers; other platforms are reserved stubs.
+// smart review. Adapters: OpenAI-compatible (/audio/transcriptions, verbose_json; OpenAI, Groq and
+// self-hosted Whisper), Qianwen (Qwen-Audio-ASR / Fun-ASR-Flash, qwen.go) and Volcengine recording-file
+// recognition (volcengine.go); other platforms are reserved stubs.
 package asr
 
 import (
@@ -51,6 +52,28 @@ type Account struct {
 	APIKey   string
 	Model    string
 	Config   map[string]any
+	// Publish makes a local file downloadable from the internet for a limited time (a signed link on this
+	// site); services that only accept an audio URL use it. cleanup removes the file again.
+	Publish func(ctx context.Context, path string) (url string, cleanup func(), err error)
+}
+
+// Chunker is implemented by services that accept only short recordings; long audio is cut into pieces of at
+// most MaxChunkMs before it is sent.
+type Chunker interface {
+	MaxChunkMs() int64
+}
+
+// Checker verifies an account's address and key without transcribing anything (recognition is billed).
+type Checker interface {
+	Check(ctx context.Context) (string, error)
+}
+
+// ChunkMs is the piece length to cut long audio into for p (at most def).
+func ChunkMs(p Provider, def int64) int64 {
+	if c, ok := p.(Chunker); ok && c.MaxChunkMs() > 0 && c.MaxChunkMs() < def {
+		return c.MaxChunkMs()
+	}
+	return def
 }
 
 func New(a Account) (Provider, error) {
@@ -65,7 +88,11 @@ func New(a Account) (Provider, error) {
 			model = "whisper-1"
 		}
 		return &openAICompat{base: base, key: a.APIKey, model: model, http: &http.Client{Timeout: 10 * time.Minute}}, nil
-	case "aliyun", "volcengine", "tencent", "xfyun":
+	case "qwen", "aliyun":
+		return newQwen(a), nil
+	case "volcengine":
+		return newVolc(a), nil
+	case "tencent", "xfyun":
 		return stub(a.Provider), nil
 	}
 	return nil, fmt.Errorf("未知的语音识别平台：%s", a.Provider)

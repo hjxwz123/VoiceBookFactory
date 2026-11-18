@@ -103,6 +103,8 @@ var fakeProfiles = map[string]CharacterInfo{
 
 func fakeAnswer(system, user string) any {
 	switch {
+	case strings.Contains(system, "text-to-sound-effects"):
+		return map[string]any{"prompt": "heavy rain drumming on a tin roof at night, close-mic, steady ambience"}
 	case strings.Contains(system, "有声书导演"): // character analysis
 		var chars []CharacterInfo
 		for name, p := range fakeProfiles {

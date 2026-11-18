@@ -75,6 +75,7 @@ type BatchInput struct {
 	ExpiresAt    *time.Time `json:"expiresAt"`
 	Channel      string     `json:"channel"`
 	Note         string     `json:"note"`
+	PriceCents   int64      `json:"priceCents"` // what each code sells for (0 = free)
 }
 
 // CreateBatch validates the input and generates the codes.
@@ -86,6 +87,10 @@ func (a *App) CreateBatch(in BatchInput, operatorID string) (*model.RedeemBatch,
 	b := &model.RedeemBatch{Name: truncateStr(in.Name, 100), Kind: in.Kind, Mode: in.Mode, StartsAt: in.StartsAt, ExpiresAt: in.ExpiresAt,
 		Channel: truncateStr(strings.TrimSpace(in.Channel), 60), Note: truncateStr(in.Note, 250), Status: "active", CreatedBy: operatorID,
 		NewUsersOnly: in.NewUsersOnly, MaxUses: max(in.MaxUses, 0), PerUserLimit: 1}
+	if in.PriceCents < 0 || in.PriceCents > 10_000_000 {
+		return nil, Bad("售价应在 0~10 万元之间")
+	}
+	b.Price = in.PriceCents
 	if in.PerUserLimit != nil {
 		b.PerUserLimit = max(*in.PerUserLimit, 0)
 	}
@@ -370,6 +375,13 @@ func (a *App) Redeem(u *model.User, raw, studioID, ip string) (*RedeemResult, er
 		return nil, grantErr
 	}
 	a.DB.Model(&model.RedeemUse{}).Where("id = ?", use.ID).Update("summary", truncateStr(res.Summary, 250))
+	if batch.Price > 0 { // a code bought from the site's shop or a reseller: the user paid for it
+		target := studioID
+		if batch.Kind != model.RedeemCredits {
+			target = u.PersonalStudio
+		}
+		a.RecordPayment(PaymentInput{UserID: u.ID, StudioID: target, Amount: batch.Price, Source: model.PaymentRedeem, RefID: code.ID, Summary: "兑换码「" + batch.Name + "」：" + res.Summary})
+	}
 	a.Audit(u.ID, "redeem", "redeem_code", code.ID, "", ip, map[string]any{"batch": batch.ID, "kind": batch.Kind})
 	return res, nil
 }

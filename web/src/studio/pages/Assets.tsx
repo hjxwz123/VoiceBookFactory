@@ -9,7 +9,7 @@ import { useSession } from '@/lib/session'
 import { assetKindName, LibraryCategoryChips, LibraryCredit } from '@/components/asset'
 import { CopyrightNotice } from '@/components/legal'
 import { PlayButton, UploadZone } from '@/components/audio'
-import { Badge, Button, Checkbox, Chip, cn, confirm, Dialog, Empty, Fade, Field, Input, PageHeader, Pagination, Segmented, Select, Sheet, Skeleton, Slider, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Checkbox, Chip, cn, confirm, Dialog, Empty, Fade, Field, Input, PageHeader, Pagination, Segmented, Select, Sheet, Skeleton, Slider, Switch, Tabs, Textarea } from '@/components/ui'
 import { invalidate } from '../hooks'
 import Templates from './Templates'
 
@@ -137,7 +137,54 @@ const genExamples: Record<string, string[]> = {
 }
 
 type MusicFeatures = { vocals: boolean; lyrics: boolean; style: boolean; duration: boolean; perRequest: number }
-type GenOptions = Record<string, { available: boolean; provider?: string; name?: string; builtin?: boolean; features?: MusicFeatures }>
+type GenOptions = Record<string, { available: boolean; provider?: string; name?: string; builtin?: boolean; features?: MusicFeatures; maxSeconds?: number; loop?: boolean; autoDuration?: boolean; references?: number }>
+
+// Reference recordings ("提示音") for sound effect services that imitate a sound: library audio named @音频1… in the description.
+function ReferencePicker({ max, value, onChange, onInsert }: { max: number; value: any[]; onChange: (v: any[]) => void; onInsert: (tag: string) => void }) {
+  const sid = useSession((s) => s.studioId)
+  const [open, setOpen] = useState(false)
+  const [kind, setKind] = useState('sfx')
+  const [q, setQ] = useState('')
+  const list = useQuery({ queryKey: ['ref-assets', sid, kind, q], queryFn: () => api.get(`/studios/${sid}/assets${qs({ kind, q, page: 1, pageSize: 8 })}`), enabled: open && !!sid, placeholderData: (p) => p })
+  const chosen = new Set(value.map((a) => a.id))
+  return (
+    <Field label="参考音频（提示音，可选）" hint={`最多 ${max} 段，每段只取前 30 秒。在描述里用 @音频1、@音频2 指代它们，例如「参考 @音频1 的雨声，加入远处的雷声」`}>
+      <div className="space-y-2">
+        {value.map((a, i) => (
+          <div key={a.id} className="flex items-center gap-2.5 rounded-[10px] border border-line bg-surface px-2.5 py-1.5">
+            <PlayButton id={'ref:' + a.id} url={a.url} title={a.name} size="xs" />
+            <button type="button" className="shrink-0 rounded-md bg-accent-soft px-1.5 py-0.5 font-mono text-[11.5px] text-accent hover:brightness-95" title="插入到描述" onClick={() => onInsert(`@音频${i + 1}`)}>@音频{i + 1}</button>
+            <span className="min-w-0 flex-1 truncate text-[13px]">{a.name}</span>
+            <span className="shrink-0 text-xs text-faint tnum">{duration(a.durationMs)}{a.durationMs > 30000 && '（取前 30 秒）'}</span>
+            <button type="button" aria-label="移除" className="shrink-0 rounded px-1 text-faint hover:text-danger" onClick={() => onChange(value.filter((x) => x.id !== a.id))}>×</button>
+          </div>
+        ))}
+        {value.length < max && !open && <Button size="sm" variant="ghost" icon={<Music className="size-3.5" />} onClick={() => setOpen(true)}>从资产库选择</Button>}
+        {open && (
+          <div className="rounded-[10px] border border-line bg-sunken p-2.5">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Segmented size="sm" value={kind} onChange={setKind} items={['sfx', 'ambience', 'bgm'].map((k) => ({ value: k, label: assetKindName[k] }))} />
+              <div className="min-w-32 flex-1"><Input icon={<Search />} placeholder="搜索素材" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>收起</Button>
+            </div>
+            {!list.data?.items?.length ? <p className="py-4 text-center text-xs text-faint">{list.isLoading ? '加载中…' : '没有找到素材'}</p> : (
+              <ul className="max-h-56 space-y-1 overflow-y-auto">
+                {list.data.items.map((a: any) => (
+                  <li key={a.id} className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-surface">
+                    <PlayButton id={'ref:' + a.id} url={a.url} title={a.name} size="xs" />
+                    <span className="min-w-0 flex-1 truncate text-[13px]">{a.name}</span>
+                    <span className="shrink-0 text-xs text-faint tnum">{duration(a.durationMs)}</span>
+                    <Button size="xs" variant={chosen.has(a.id) ? 'ghost' : 'secondary'} disabled={chosen.has(a.id) || value.length >= max} onClick={() => { onChange([...value, a]); if (value.length + 1 >= max) setOpen(false) }}>{chosen.has(a.id) ? '已选' : '选用'}</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </Field>
+  )
+}
 
 function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const sid = useSession((s) => s.studioId)
@@ -150,13 +197,19 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const [lyrics, setLyrics] = useState('')
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
+  const [autoDur, setAutoDur] = useState(true)
+  const [loop, setLoop] = useState(false)
+  const [refs, setRefs] = useState<any[]>([])
+  useEffect(() => { if (!open) setRefs([]) }, [open])
   // what the configured services can do: Suno takes style, lyrics and sung songs but picks its own length
   const opts = useQuery({ queryKey: ['gen-options', sid], queryFn: () => api.get<GenOptions>(`/studios/${sid}/generate/options`), enabled: open && !!sid, staleTime: 60_000 })
   const music = opts.data?.music
   const mf = kind === 'music' ? music?.features : undefined
   const per = mf?.perRequest ?? 1
   const counts = per > 1 ? [per, per * 2] : [1, 2, 4]
-  const showDuration = kind !== 'image' && (kind !== 'music' || !mf || mf.duration)
+  const sfx = kind === 'sfx' ? opts.data?.sfx : undefined
+  const sfxAuto = !!sfx?.autoDuration && autoDur
+  const showDuration = kind !== 'image' && (kind !== 'music' || !mf || mf.duration) && !sfxAuto
   const examples = kind === 'music' && vocal ? vocalExamples : genExamples[kind]
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title="AI 生成素材" description="描述你想要的声音或画面，生成后会自动保存到资产库。" width={580} footer={<><Button onClick={() => onOpenChange(false)}>取消</Button><Button variant="primary" icon={<Wand2 className="size-4" />} loading={busy} disabled={!prompt.trim()} onClick={async () => {
@@ -164,7 +217,8 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
       try {
         const songs = kind === 'music' && mf?.vocals
         await api.post(`/studios/${sid}/generate`, {
-          kind, prompt, durationMs: showDuration ? dur * 1000 : 0, count,
+          kind, prompt, durationMs: showDuration ? dur * 1000 : 0, count, loop: !!sfx?.loop && loop,
+          ...(sfx?.references && refs.length ? { references: refs.map((a) => a.id) } : {}),
           ...(songs ? { vocal, style: mf?.style ? style : '', lyrics: vocal && mf?.lyrics ? lyrics : '', title: vocal ? title : '' } : {}),
         })
         toast.success(songs ? `已交给 ${music?.name ?? '音乐服务'} 作曲，通常 1–3 分钟完成，完成后会出现在资产库并通知你` : '正在生成，完成后会出现在资产库并通知你')
@@ -172,6 +226,7 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         setPrompt('')
         setLyrics('')
         setTitle('')
+        setRefs([])
       } finally {
         setBusy(false)
       }
@@ -194,13 +249,21 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
             <Field label="歌词（可选）" hint="留空由 AI 根据描述写词；可以用 [Verse] [Chorus] 标出段落"><Textarea rows={4} value={lyrics} onChange={(e) => setLyrics(e.target.value)} maxLength={3000} /></Field>
           </div>
         )}
-        {showDuration && <Field label={`时长 ${dur} 秒`}><Slider value={dur} min={kind === 'sfx' ? 1 : 10} max={kind === 'sfx' ? 22 : 180} step={1} onChange={setDur} /></Field>}
+        {sfx?.autoDuration && (
+          <Field label="时长" hint={autoDur ? `由${/^[A-Za-z]/.test(sfx.name ?? '') ? ` ${sfx.name} ` : sfx.name}按描述决定${sfx.provider === 'elevenlabs_sfx' ? '，通常 2–10 秒' : ''}` : undefined}>
+            <Segmented size="sm" value={autoDur ? 'auto' : 'set'} onChange={(v) => setAutoDur(v === 'auto')} items={[{ value: 'auto', label: '自动' }, { value: 'set', label: '指定时长' }]} />
+          </Field>
+        )}
+        {showDuration && <Field label={`时长 ${dur} 秒`}><Slider value={dur} min={kind === 'sfx' ? 1 : 10} max={kind === 'sfx' ? sfx?.maxSeconds ?? 22 : 180} step={1} onChange={setDur} /></Field>}
+        {sfx?.loop && <Switch checked={loop} onChange={setLoop} label="生成可以无缝循环的声音（适合雨声、风声、人群等环境声）" />}
+        {!!sfx?.references && <ReferencePicker max={sfx.references} value={refs} onChange={setRefs} onInsert={(tag) => setPrompt((p) => (p && !p.endsWith(' ') ? p + ' ' : p) + tag + ' ')} />}
         <Field label="生成数量" hint={per > 1 ? `${music?.name ?? '音乐服务'}每次生成 ${per} 首，时长由它决定，通常 2–4 分钟` : undefined}>
           <Segmented size="sm" value={String(count)} onChange={(v) => setCount(Number(v))} items={counts.map((v) => ({ value: String(v), label: kind === 'music' && per > 1 ? `${v} 首` : `${v} 个` }))} />
         </Field>
         <p className="text-[12px] leading-relaxed text-muted">
           AI 生成的内容可能与已有作品相似，本平台不保证其不侵犯他人权利，请自行判断后使用。
           {kind === 'music' && music?.name && <>音乐由第三方服务（{music.name}）生成，能否商用以该服务的条款为准。</>}
+          {kind === 'sfx' && sfx?.name && <>音效由第三方服务（{sfx.name}）生成，能否商用以该服务的条款为准。</>}
           <a href="/legal/copyright" target="_blank" rel="noreferrer" className="text-accent hover:underline">版权声明</a>
         </p>
       </div>

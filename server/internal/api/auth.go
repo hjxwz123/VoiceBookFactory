@@ -123,7 +123,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 	r.Get("/site", h(func(r *http.Request) (any, error) {
 		site := s.app.Site()
 		return map[string]any{
-			"name": site.Name, "slogan": site.Slogan, "logo": site.Logo, "registrationOpen": site.RegistrationOpen, "inviteOnly": site.InviteOnly,
+			"name": site.Name, "slogan": site.Slogan, "logo": site.Logo, "registrationOpen": site.RegistrationOpen, "regCodeRequired": site.RegCodeRequired, "referral": s.app.Referral().Enabled, "referralBypass": s.app.Referral().BypassRegCode,
 			"emailVerification": s.app.EmailVerificationRequired(), "devMode": s.app.Cfg.DevMode, "maxUploadMb": site.MaxUploadMB,
 			"supportEmail": site.SupportEmail, "icp": site.ICP, "speechRate": site.SpeechRate,
 			"phoneLogin": s.app.PhoneLoginAvailable(), "oauthProviders": s.app.OAuthProviders(),
@@ -169,6 +169,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			fail(w, err)
 			return
 		}
+		in.IP = clientIP(r)
 		u, err := s.app.Register(in)
 		if err != nil {
 			fail(w, err)
@@ -246,12 +247,13 @@ func (s *Server) publicRoutes(r chi.Router) {
 		var in struct {
 			Target, Code string
 			Agree        bool
+			core.SignupCodes
 		}
 		if err := bind(r, &in); err != nil {
 			fail(w, err)
 			return
 		}
-		u, pair, err := s.app.LoginWithCode(in.Target, in.Code, "studio", r.UserAgent(), clientIP(r))
+		u, pair, err := s.app.LoginWithCode(in.Target, in.Code, "studio", r.UserAgent(), clientIP(r), in.SignupCodes)
 		if err != nil {
 			fail(w, err)
 			return
@@ -271,7 +273,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			}
 			redirect = firstNonEmptyStr(redirect, "/settings/account")
 		}
-		u, cookie, err := s.app.OAuthBegin(r.Context(), param(r, "provider"), redirect, bindUser, q.Get("agree") == "1")
+		u, cookie, err := s.app.OAuthBegin(r.Context(), param(r, "provider"), redirect, bindUser, q.Get("agree") == "1", core.SignupCodes{RegCode: q.Get("regCode"), Referral: q.Get("ref")})
 		if err != nil {
 			s.oauthFailed(w, r, redirect, bindUser != "", err)
 			return

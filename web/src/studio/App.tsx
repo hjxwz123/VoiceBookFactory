@@ -1,10 +1,10 @@
 import React, { lazy, Suspense, useEffect } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useSession } from '@/lib/session'
 import { Spinner } from '@/components/ui'
 import Shell from './Shell'
-import { AuthPage, OAuthDone } from './pages/Auth'
+import { AuthPage, OAuthDone, rememberedReferral } from './pages/Auth'
 import { LegalGate } from '@/components/legal'
 
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -23,6 +23,7 @@ const StudioSettings = lazy(() => import('./pages/StudioSettings'))
 const Account = lazy(() => import('./pages/Account'))
 const Membership = lazy(() => import('./pages/Membership'))
 const Help = lazy(() => import('./pages/Help'))
+const Referral = lazy(() => import('./pages/Referral'))
 const Invite = lazy(() => import('./pages/Invite'))
 const Share = lazy(() => import('./pages/Share'))
 const LegalPage = lazy(() => import('./pages/Legal'))
@@ -33,6 +34,14 @@ export const Loading = () => (
     <Spinner className="size-5" />
   </div>
 )
+
+/** A friend's invite link: remember the code, then sign up (or just go in when already signed in). */
+function InviteLink() {
+  const { code = '' } = useParams()
+  const user = useSession((s) => s.user)
+  rememberedReferral(code.toUpperCase())
+  return <Navigate to={user ? '/' : `/register?ref=${encodeURIComponent(code.toUpperCase())}`} replace />
+}
 
 function Protected({ children }: { children: React.ReactElement }) {
   const { user, ready } = useSession()
@@ -66,6 +75,7 @@ export default function App() {
         <Route path="/forgot" element={<AuthPage mode="forgot" />} />
         <Route path="/oauth/done" element={<OAuthDone />} />
         <Route path="/invite/:token" element={<Invite />} />
+        <Route path="/r/:code" element={<InviteLink />} />
         <Route path="/s/:token" element={<Share />} />
         <Route path="/legal/:slug?" element={<LegalPage />} />
         <Route path="/welcome" element={<Landing />} />
@@ -86,6 +96,7 @@ export default function App() {
           <Route path="settings/account" element={<Account />} />
           <Route path="membership" element={<Membership />} />
           <Route path="help/*" element={<Help />} />
+          <Route path="referral" element={<Referral />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

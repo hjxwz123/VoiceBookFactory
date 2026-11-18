@@ -56,7 +56,7 @@ function StudioDetail({ id, plans, onClose }: { id: string | null; plans: any[];
   const s = data?.studio
   const [f, setF] = useState<any>(null)
   const [grant, setGrant] = useState(false)
-  const [g, setG] = useState({ amount: 10000, reason: '', expiresDays: 0 })
+  const [g, setG] = useState<{ amount: number; reason: string; expiresDays: number; paidYuan?: number }>({ amount: 10000, reason: '', expiresDays: 0 })
   useEffect(() => { if (s) setF({ planId: s.planOverrideId ?? '', status: s.status, seatLimit: s.seats?.limit ?? 0, storageLimit: Math.round((s.storage?.limit ?? 0) / 1024 / 1024 / 1024), features: s.features ?? [] }) }, [s?.id, data])
   return (
     <Sheet open={!!id} onOpenChange={(o) => !o && onClose()} title={s?.name} description={s && `${s.type === 'personal' ? '个人' : '团队'}工作室 · 所有者 ${s.owner}`} width={620}>
@@ -104,6 +104,7 @@ function StudioDetail({ id, plans, onClose }: { id: string | null; plans: any[];
           <Field label="积分"><Input type="number" value={g.amount} onChange={(e) => setG({ ...g, amount: Number(e.target.value) })} /></Field>
           <Field label="原因"><Input value={g.reason} onChange={(e) => setG({ ...g, reason: e.target.value })} placeholder="例如：活动奖励、客诉补偿" /></Field>
           {g.amount > 0 && <Field label="有效期（天）" hint="0 表示永久有效"><Input type="number" value={g.expiresDays} onChange={(e) => setG({ ...g, expiresDays: Number(e.target.value) })} /></Field>}
+          {g.amount > 0 && <Field label="实收金额（元，选填）" hint="用户线下付款买的积分，填写实际收到的钱：会记为一笔充值，邀请人按规则获得返利。赠送、补偿不用填"><Input type="number" min={0} step="0.01" value={g.paidYuan ?? ''} onChange={(e) => setG({ ...g, paidYuan: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder="0" /></Field>}
         </div>
       </Dialog>
     </Sheet>

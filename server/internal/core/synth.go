@@ -247,7 +247,11 @@ func (a *App) synthesizeSegment(ctx context.Context, b *model.Book, s *model.Seg
 	if !regenerate {
 		var cached model.Take
 		if a.DB.Where("cache_key = ? AND status = ? AND origin = ?", cacheKey, model.AudioReady, model.TakeTTS).Order("created_at desc").First(&cached).Error == nil && a.Store.Exists(a.assetKeyByID(cached.AssetID)) {
-			t := model.Take{SegmentID: s.ID, ChapterID: s.ChapterID, Origin: model.TakeTTS, VoiceID: vc.Voice.ID, Provider: acc.Provider, Model: vc.Voice.Model, CacheKey: cacheKey, ContentHash: hash, AssetID: cached.AssetID, DurationMs: cached.DurationMs, Status: model.AudioReady, CreatedBy: userID, Params: model.EmptyMap(), QCDetail: model.EmptyMap(), Note: "缓存复用"}
+			params := model.EmptyMap()
+			if p, ok := cached.Params.V["providerPrompts"]; ok { // the prompt that produced the reused audio
+				params.V["providerPrompts"] = p
+			}
+			t := model.Take{SegmentID: s.ID, ChapterID: s.ChapterID, Origin: model.TakeTTS, VoiceID: vc.Voice.ID, Provider: acc.Provider, Model: vc.Voice.Model, CacheKey: cacheKey, ContentHash: hash, AssetID: cached.AssetID, DurationMs: cached.DurationMs, Status: model.AudioReady, CreatedBy: userID, Params: params, QCDetail: model.EmptyMap(), Note: "缓存复用"}
 			if err := a.DB.Create(&t).Error; err != nil {
 				return nil, err
 			}
@@ -284,7 +288,11 @@ func (a *App) synthesizeSegment(ctx context.Context, b *model.Book, s *model.Seg
 			extra = int64(nChars/1000*float64(listing.PricePer1K) + 0.999)
 		}
 	}
-	credits, err := a.ChargeCredits(Charge{StudioID: b.StudioID, UserID: userID, BookID: b.ID, ChapterID: s.ChapterID, JobID: jobID, Feature: FeatTTS, Tier: vc.Voice.PriceTier, Quantity: nChars, Unit: "chars", Provider: acc.Provider, AccountID: acc.ID, Model: vc.Voice.Model, BYOK: acc.Scope == "studio", CostCNY: nChars / 1000 * acc.CostPerUnit, Free: free, Extra: extra})
+	cost := nChars / 1000 * acc.CostPerUnit
+	if tts.BillsByDuration(provider) { // audio generation is billed per minute of audio, not per character
+		cost = float64(dur) / 60000 * acc.CostPerUnit
+	}
+	credits, err := a.ChargeCredits(Charge{StudioID: b.StudioID, UserID: userID, BookID: b.ID, ChapterID: s.ChapterID, JobID: jobID, Feature: FeatTTS, Tier: vc.Voice.PriceTier, Quantity: nChars, Unit: "chars", Provider: acc.Provider, AccountID: acc.ID, Model: vc.Voice.Model, BYOK: acc.Scope == "studio", CostCNY: cost, Free: free, Extra: extra})
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +302,9 @@ func (a *App) synthesizeSegment(ctx context.Context, b *model.Book, s *model.Seg
 	t := model.Take{SegmentID: s.ID, ChapterID: s.ChapterID, Origin: model.TakeTTS, VoiceID: vc.Voice.ID, Provider: acc.Provider, Model: vc.Voice.Model, CacheKey: cacheKey, ContentHash: hash,
 		AssetID: asset.ID, DurationMs: dur, Status: model.AudioReady, CreatedBy: userID, Credits: credits,
 		Params: model.Map{V: map[string]any{"emotion": emotion, "speed": speed, "pitch": pitch, "crowd": vc.Crowd}}, QCDetail: model.EmptyMap()}
+	if len(audioOut.Prompts) > 0 { // platforms driven by a written prompt: keep what was sent, so it can be checked and tuned
+		t.Params.V["providerPrompts"] = audioOut.Prompts
+	}
 	if err := a.DB.Create(&t).Error; err != nil {
 		return nil, err
 	}
@@ -722,7 +733,7 @@ func (a *App) autoQC(ctx context.Context, b *model.Book, s *model.Segment, chars
 		if err != nil {
 			return out
 		}
-		res, err := prov.Transcribe(ctx, path, b.Language)
+		res, err := a.transcribeClip(ctx, prov, path, b.Language, int64(out.Take.DurationMs))
 		if err != nil {
 			return out
 		}

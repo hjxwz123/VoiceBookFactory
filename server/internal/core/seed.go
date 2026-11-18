@@ -33,6 +33,7 @@ func (a *App) Seed() error {
 		return err
 	}
 	a.migrateMemberships() // needs the admin account
+	a.migrateRegistrationCode()
 
 	a.seeding.Store(true)
 	go func() {
@@ -43,6 +44,7 @@ func (a *App) Seed() error {
 			a.seedVoices(ctx)
 			a.seedQwenCatalog()
 			a.seedMiniMaxCatalog()
+			a.seedVolcCatalog()
 			a.seedAssets(ctx)
 			a.syncLibraryAssets()
 			a.seedTemplates()

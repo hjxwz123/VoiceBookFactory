@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Check, Flag, Lock, Plus, RefreshCw, RotateCcw, Scissors, Trash2, Unlock, Upload } from '@/components/icons'
+import { ArrowDown, ArrowUp, Check, Copy, FileText, Flag, Lock, Plus, RefreshCw, RotateCcw, Scissors, Trash2, Unlock, Upload } from '@/components/icons'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useSession } from '@/lib/session'
-import { clipLength, emotions, fromNow, issueStatusName, issueTypes, segTypeName } from '@/lib/format'
+import { clipLength, copy, emotions, fromNow, issueStatusName, issueTypes, segTypeName } from '@/lib/format'
 import { PlayButton, Recorder } from '@/components/audio'
 import { Badge, Button, Chip, cn, confirm, Dialog, Empty, Field, IconButton, Input, Popover, Segmented, Select, Slider, Switch, Textarea, Tip } from '@/components/ui'
 import { can, invalidate } from '../../hooks'
@@ -25,6 +25,32 @@ export default function Inspector({ book, chapterId, segs, chars }: { book: any;
       />
     )
   return <SegmentInspector key={s.id} s={s} book={book} chapterId={chapterId} chars={chars} segs={segs} />
+}
+
+/** The prompt(s) a take was generated from, for platforms driven by a written prompt (e.g. 豆包音频生成). */
+function TakePrompts({ prompts }: { prompts: string[] }) {
+  const many = prompts.length > 1
+  return (
+    <div className="rounded-[9px] border border-line bg-sunken/50 px-3 py-2.5">
+      <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-muted">
+        <span className="min-w-0 flex-1">{many ? `发给 AI 的提示词 · 这一句较长，分 ${prompts.length} 次生成` : '发给 AI 的提示词'}</span>
+        <button
+          className="inline-flex shrink-0 items-center gap-1 text-faint hover:text-ink"
+          onClick={() => copy(prompts.join('\n\n')).then(() => toast.success('提示词已复制'), () => toast.error('复制失败，请手动选择文字复制'))}
+        >
+          <Copy className="size-3" />复制
+        </button>
+      </div>
+      <div className="space-y-1.5">
+        {prompts.map((p, k) => (
+          <p key={k} className="select-text whitespace-pre-wrap break-words text-[12px] leading-relaxed text-ink">
+            {many && <span className="mr-1 tabular-nums text-faint">{k + 1}.</span>}
+            {p}
+          </p>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function Section({ title, children, actions }: { title: string; children: React.ReactNode; actions?: React.ReactNode }) {
@@ -48,6 +74,7 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
   const [note, setNote] = useState(s.note ?? '')
   const [regen, setRegen] = useState(false)
   const [issue, setIssue] = useState(false)
+  const [promptOf, setPromptOf] = useState<string | null>(null)
   const takes = useQuery<any[]>({ queryKey: ['takes', s.id, s.selectedTakeId, s.audioStatus], queryFn: () => api.get(`/segments/${s.id}/takes`), enabled: !s.pending })
   const cues = segmentCues(s)
   const speed = s.speed ?? 1
@@ -122,26 +149,35 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
         {s.audioStatus === 'failed' && <p className="mb-3 rounded-md bg-danger-soft px-3 py-2 text-xs text-danger">{s.lastError || '生成失败'}</p>}
         {s.qc === 'suspect' && s.qcNote && <p className="mb-3 rounded-md bg-warn-soft px-3 py-2 text-xs text-warn">自动质检：{s.qcNote}</p>}
         <div className="space-y-1.5">
-          {(takes.data ?? []).map((t, i) => (
-            <div key={t.id} className={cn('flex items-center gap-2.5 rounded-[9px] border px-2.5 py-2', t.selected ? 'border-accent bg-accent-soft/60' : 'border-line')}>
-              <PlayButton id={'take:' + t.id} url={t.url} title={s.text} size="xs" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[12.5px] font-medium">
-                  {t.origin === 'tts' ? t.voiceName || 'AI 配音' : t.origin === 'record' ? `录音 · ${t.createdBy}` : t.origin === 'align' ? '整段录音对轨' : `上传 · ${t.createdBy}`}
-                  <span className="ml-1.5 font-normal text-faint">#{(takes.data?.length ?? 0) - i}</span>
+          {(takes.data ?? []).map((t, i) => {
+            const prompts: string[] = Array.isArray(t.params?.providerPrompts) ? t.params.providerPrompts : []
+            return (
+              <div key={t.id} className="space-y-1.5">
+                <div className={cn('flex items-center gap-2.5 rounded-[9px] border px-2.5 py-2', t.selected ? 'border-accent bg-accent-soft/60' : 'border-line')}>
+                  <PlayButton id={'take:' + t.id} url={t.url} title={s.text} size="xs" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12.5px] font-medium">
+                      {t.origin === 'tts' ? t.voiceName || 'AI 配音' : t.origin === 'record' ? `录音 · ${t.createdBy}` : t.origin === 'align' ? '整段录音对轨' : `上传 · ${t.createdBy}`}
+                      <span className="ml-1.5 font-normal text-faint">#{(takes.data?.length ?? 0) - i}</span>
+                    </div>
+                    <div className="text-[11px] text-faint">{clipLength(t.durationMs)} · {fromNow(t.createdAt)}{t.credits > 0 && ` · ${t.credits} 积分`}{t.note && ` · ${t.note}`}</div>
+                  </div>
+                  {prompts.length > 0 && (
+                    <IconButton label={promptOf === t.id ? '收起提示词' : '查看发给 AI 的提示词'} size="xs" className={cn(promptOf === t.id && '!text-accent')} icon={<FileText className="size-3.5" />} onClick={() => setPromptOf(promptOf === t.id ? null : t.id)} />
+                  )}
+                  {t.selected ? (
+                    <Tip label="正在使用"><Check className="size-4 text-accent" /></Tip>
+                  ) : (
+                    <>
+                      <Button size="xs" variant="ghost" onClick={async () => { await api.post(`/segments/${s.id}/takes/${t.id}/select`); refetchScript(chapterId); invalidate(['takes', s.id]); toast.success('已切换到这个版本') }}>使用</Button>
+                      <IconButton label="删除这个版本" size="xs" icon={<Trash2 className="size-3.5" />} onClick={async () => { if (!(await confirm({ title: '删除这个版本？', description: '删除后不能恢复。', danger: true, confirmText: '删除' }))) return; await api.del(`/segments/${s.id}/takes/${t.id}`); invalidate(['takes', s.id]); toast.success('已删除这个版本') }} />
+                    </>
+                  )}
                 </div>
-                <div className="text-[11px] text-faint">{clipLength(t.durationMs)} · {fromNow(t.createdAt)}{t.credits > 0 && ` · ${t.credits} 积分`}{t.note && ` · ${t.note}`}</div>
+                {promptOf === t.id && <TakePrompts prompts={prompts} />}
               </div>
-              {t.selected ? (
-                <Tip label="正在使用"><Check className="size-4 text-accent" /></Tip>
-              ) : (
-                <>
-                  <Button size="xs" variant="ghost" onClick={async () => { await api.post(`/segments/${s.id}/takes/${t.id}/select`); refetchScript(chapterId); invalidate(['takes', s.id]); toast.success('已切换到这个版本') }}>使用</Button>
-                  <IconButton label="删除这个版本" size="xs" icon={<Trash2 className="size-3.5" />} onClick={async () => { if (!(await confirm({ title: '删除这个版本？', description: '删除后不能恢复。', danger: true, confirmText: '删除' }))) return; await api.del(`/segments/${s.id}/takes/${t.id}`); invalidate(['takes', s.id]); toast.success('已删除这个版本') }} />
-                </>
-              )}
-            </div>
-          ))}
+            )
+          })}
           {!takes.data?.length && <p className="text-xs text-faint">还没有音频。点「生成」用角色声音配音，或在下面直接录音。</p>}
         </div>
         {can(book, 'record') && (
@@ -158,7 +194,7 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
       {s.type !== 'sfx' && (
         <Section title="演绎">
           {char?.voice?.capabilities && !char.voice.capabilities.emotion && (
-            <p className="mb-3 rounded-md bg-sunken px-3 py-2 text-xs text-muted">当前音色（{char.voice.modelLabel || char.voice.name}）不支持情绪和语气控制，下面的情绪设置会被忽略。可以通过语速、音高和停顿调整表现，或在「角色」里换成支持情绪的音色（Qwen-Audio、MiniMax 系列）。</p>
+            <p className="mb-3 rounded-md bg-sunken px-3 py-2 text-xs text-muted">当前音色（{char.voice.modelLabel || char.voice.name}）不支持情绪和语气控制，下面的情绪设置会被忽略。可以通过语速、音高和停顿调整表现，或在「角色」里换成支持情绪的音色（Qwen-Audio、MiniMax、豆包音频生成）。</p>
           )}
           <div className="flex flex-wrap gap-1.5">
             {emotions.map(([k, l]) => (
