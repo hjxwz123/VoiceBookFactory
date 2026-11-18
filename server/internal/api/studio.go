@@ -820,6 +820,7 @@ func (s *Server) saveProvider(acc *model.ProviderAccount, in providerInput, scop
 			return nil, err
 		}
 		acc.CredentialsEnc, acc.KeyLast4 = enc, secure.Last4(strings.TrimSpace(*in.APIKey))
+		acc.VoicesFullAt = nil // a new key may belong to another platform account with its own voice quota
 	}
 	if in.Model != nil {
 		acc.Model = strings.TrimSpace(*in.Model)

@@ -138,9 +138,12 @@ func (q *qwen) Capabilities() Capabilities {
 		Emotion: true, Emotions: allEmotions, InlineTags: true, Instruction: true, SSML: true, Phoneme: true, PronunciationDict: true,
 		MaxChars: 5000, Languages: []string{"zh-CN", "en-US", "ja-JP", "ko-KR", "fr", "de", "es", "pt", "it", "ru", "id-ID", "vi", "th"},
 		QuickClone: true, CloneMinSeconds: 10, CloneMaxSeconds: 60, ServerDenoise: qwenClonePreprocess[q.cloneModel()],
-		VoiceDesign: true, DesignPromptMax: qwenDesignPromptMax,
+		VoiceDesign: true, DesignPromptMax: qwenDesignPromptMax, VoiceLimit: QwenVoiceLimit,
 	}
 }
+
+// QwenVoiceLimit: "每个千问AI平台账号的自定义音色总数上限为 1000 个", shared by clones and designs, not per model.
+const QwenVoiceLimit = 1000
 
 // VoiceCapabilities resolves what a specific model+voice supports.
 func (q *qwen) VoiceCapabilities(model, voiceID string) Capabilities {
@@ -646,9 +649,9 @@ var qwenClonePreprocess = map[string]bool{
 }
 
 var qwenCloneLanguages = map[string][]string{
-	"qwen-audio": {"zh", "en", "fr", "de", "ja", "ko", "ru", "pt", "th", "id", "vi", "it", "es", "ms", "fil", "ar"},
+	"qwen-audio":        {"zh", "en", "fr", "de", "ja", "ko", "ru", "pt", "th", "id", "vi", "it", "es", "ms", "fil", "ar"},
 	"cosyvoice-v3-plus": {"zh", "en", "fr", "de", "ja", "ko", "ru"},
-	"cosyvoice": {"zh", "en", "fr", "de", "ja", "ko", "ru", "pt", "th", "id", "vi"},
+	"cosyvoice":         {"zh", "en", "fr", "de", "ja", "ko", "ru", "pt", "th", "id", "vi"},
 }
 
 // cloneModel is the account's target model for new clones (config "cloneModel").
@@ -806,7 +809,7 @@ func qwenCloneError(status int, code, msg, rid string) error {
 	case code == "BadRequest.TooLarge":
 		return errors.New("样本文件太大，千问要求小于 10 MB")
 	case code == "Throttling.AllocationQuota" || strings.Contains(m, "Maximum voice storage limit"):
-		return errors.New("千问账号的自定义音色数量已达上限（1000 个），请删除不用的复刻音色后再试")
+		return &VoiceQuotaError{Msg: "千问账号的自定义音色数量已达上限（1000 个）"}
 	case code == "BadRequest.ResourceNotExist":
 		return errors.New("音色在千问上不存在（可能已被删除）")
 	case code == "DataInspectionFailed" || strings.Contains(code, "DataInspection"):
@@ -929,7 +932,7 @@ var QwenDesignModels = []string{
 }
 
 const (
-	qwenDesignPromptMax = 500
+	qwenDesignPromptMax      = 500
 	qwenDesignPreviewDefault = "你好，很高兴认识你。这是根据你的描述设计出来的声音，听听看是否合适。"
 )
 

@@ -13,6 +13,15 @@ import (
 
 var ErrNotImplemented = errors.New("该平台的语音合成适配器为预留接口，尚未实现，请在管理端选择其他平台或接入实现")
 
+// ErrVoiceQuotaFull matches (errors.Is) the error a platform returns when the account cannot keep more custom voices.
+var ErrVoiceQuotaFull = errors.New("voice quota full")
+
+// VoiceQuotaError is a platform's "too many custom voices on this account" error, readable as is.
+type VoiceQuotaError struct{ Msg string }
+
+func (e *VoiceQuotaError) Error() string        { return e.Msg }
+func (e *VoiceQuotaError) Is(target error) bool { return target == ErrVoiceQuotaFull }
+
 type Capabilities struct {
 	Emotion           bool     `json:"emotion"`
 	Emotions          []string `json:"emotions"`
@@ -36,8 +45,13 @@ type Capabilities struct {
 	CloneExpiresUnused bool `json:"cloneExpiresUnused,omitempty"`
 	CloneMinSeconds    int  `json:"cloneMinSeconds,omitempty"` // sample length the platform accepts
 	CloneMaxSeconds    int  `json:"cloneMaxSeconds,omitempty"`
-	ServerDenoise      bool `json:"serverDenoise,omitempty"` // the platform denoises clone samples itself
+	ServerDenoise      bool `json:"serverDenoise,omitempty"`   // the platform denoises clone samples itself
 	DesignPromptMax    int  `json:"designPromptMax,omitempty"` // longest voice description the platform accepts (characters)
+	// VoiceLimit: most custom voices (clones and designs together) one platform account may keep; 0 = no known limit.
+	VoiceLimit int `json:"voiceLimit,omitempty"`
+	// LocalVoices: custom voices are reference recordings kept on this site and sent with each request, so every
+	// account of the platform can use them. Otherwise a custom voice lives on the account that created it.
+	LocalVoices bool `json:"localVoices,omitempty"`
 }
 
 type Pron struct {

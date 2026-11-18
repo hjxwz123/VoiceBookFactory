@@ -121,6 +121,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 				alerts = append(alerts, map[string]any{"level": "danger", "title": "供应商异常：" + p.Name, "detail": p.HealthNote, "link": "/admin/providers"})
 			}
 		}
+		alerts = append(alerts, s.app.VoiceQuotaAlerts()...)
 		if gaps := s.app.QueueOverview()["gaps"].([]core.QueueGap); len(gaps) > 0 {
 			alerts = append(alerts, map[string]any{"level": "danger", "title": "有会员等级没有可用的任务队列", "detail": itoa64(int64(len(gaps))) + " 类任务会一直排队，请在任务队列里让某个队列覆盖它们", "link": "/admin/jobs?tab=queues"})
 		}
@@ -652,7 +653,17 @@ func (s *Server) adminRoutes(r chi.Router) {
 		}
 		var list []model.ProviderAccount
 		q.Order("kind asc, priority desc, created_at asc").Find(&list)
-		return list, nil
+		// custom voice usage: how full each account is, and how many voices only work on it
+		type row struct {
+			model.ProviderAccount
+			CustomVoices *core.VoiceQuota `json:"customVoices,omitempty"`
+			BoundVoices  int64            `json:"boundVoices,omitempty"`
+		}
+		out := make([]row, 0, len(list))
+		for i := range list {
+			out = append(out, row{ProviderAccount: list[i], CustomVoices: s.app.VoiceQuotaOf(&list[i]), BoundVoices: s.app.BoundVoices(&list[i])})
+		}
+		return out, nil
 	}))
 	r.Post("/providers", h(func(r *http.Request) (any, error) {
 		if err := requireRole(r, model.AdminOps); err != nil {

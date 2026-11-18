@@ -18,13 +18,41 @@ type LaunchItem struct {
 	FixAt  string `json:"fixAt"` // admin route that fixes it
 }
 
+// localBase reports whether an account points at this machine (a test double, not a real connection).
+func localBase(base string) bool {
+	b := strings.ToLower(base)
+	return strings.Contains(b, "://127.") || strings.Contains(b, "://localhost") || strings.Contains(b, "://0.0.0.0") || strings.Contains(b, "://[::1]")
+}
+
+// serviceNames are the public names of implemented adapters, per kind, for the sign-up page's FAQ.
+var serviceNames = map[string]map[string]string{
+	model.KindTTS:   {"qwen": "千问", "aliyun": "千问", "minimax": "MiniMax", "volcengine_audio": "火山引擎豆包音频生成"},
+	model.KindASR:   {"qwen": "千问", "aliyun": "千问", "volcengine": "火山引擎", "openai_compat": "OpenAI 兼容服务", "openai": "OpenAI 兼容服务", "groq": "OpenAI 兼容服务", "whisper": "OpenAI 兼容服务"},
+	model.KindImage: {"openai_image": "OpenAI GPT Image", "gemini_image": "Google Nano Banana"},
+	model.KindMusic: {"suno": "Suno"},
+	model.KindSFX:   {"elevenlabs_sfx": "ElevenLabs", "volcengine_audio": "火山引擎"},
+}
+
+// ConfiguredServices names, per kind, the platforms with an enabled platform-wide account, so public pages only
+// mention services that are really configured (the demo engine and accounts on this machine are left out).
+func (a *App) ConfiguredServices() map[string][]string {
+	var accs []model.ProviderAccount
+	a.DB.Select("kind", "provider", "base_url").Where("scope = ? AND enabled = ?", "platform", true).Order("priority desc, created_at asc").Find(&accs)
+	out := map[string][]string{}
+	for _, acc := range accs {
+		name := serviceNames[acc.Kind][acc.Provider]
+		if name == "" || localBase(acc.BaseURL) || contains(out[acc.Kind], name) {
+			continue
+		}
+		out[acc.Kind] = append(out[acc.Kind], name)
+	}
+	return out
+}
+
 // LaunchCheck lists what an operator must set up before real users arrive, most critical first.
 func (a *App) LaunchCheck() []LaunchItem {
 	// accounts that point at this machine (test doubles) do not count as a real connection
-	local := func(base string) bool {
-		b := strings.ToLower(base)
-		return strings.Contains(b, "://127.") || strings.Contains(b, "://localhost") || strings.Contains(b, "://0.0.0.0") || strings.Contains(b, "://[::1]")
-	}
+	local := localBase
 	var localNames []string
 	enabled := func(kind string) (n int64) {
 		var accs []model.ProviderAccount

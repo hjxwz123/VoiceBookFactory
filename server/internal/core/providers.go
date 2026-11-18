@@ -152,6 +152,20 @@ func (a *App) ttsAccount(acc *model.ProviderAccount) tts.Account {
 func (a *App) TTSFor(v *model.Voice) (tts.Provider, *model.ProviderAccount, error) {
 	var acc model.ProviderAccount
 	var err error
+	if voiceBound(v) {
+		// a cloned or designed voice exists only on the account that created it: never try another account
+		if err := a.DB.First(&acc, "id = ?", v.ProviderAccountID).Error; err != nil {
+			return nil, nil, &Error{Status: 503, Code: "voice_account_unavailable", Msg: fmt.Sprintf("音色「%s」所在的语音账号已被删除，这个音色只能在创建它的账号上使用，现在无法生成。请给角色换一个音色", v.Name)}
+		}
+		if !acc.Enabled {
+			return nil, nil, &Error{Status: 503, Code: "voice_account_unavailable", Msg: fmt.Sprintf("音色「%s」只能在创建它的%s账号上使用，这个账号已被管理员停用。请联系管理员重新启用，或给角色换一个音色", v.Name, firstNonEmpty(platformNames[acc.Provider], acc.Provider))}
+		}
+		p, err := tts.New(a.ttsAccount(&acc))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p, &acc, nil
+	}
 	if v.ProviderAccountID != "" {
 		err = a.DB.First(&acc, "id = ? AND enabled = ?", v.ProviderAccountID, true).Error
 	}

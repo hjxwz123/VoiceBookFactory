@@ -238,6 +238,8 @@ func (a *App) CastingPool(studioID, userID, language string) []model.Voice {
 			Or("scope = ? AND owner_user_id = ?", model.ScopeUser, userID).
 			Or("scope = ? AND studio_id = ? AND shared = ?", model.ScopeUser, studioID, true)).
 		Where("(scope <> ? OR provider IN ?)", model.ScopeSystem, a.ActiveTTSProviders())
+	cond, args := a.UsableVoices() // custom voices whose own account is off cannot be cast
+	q = q.Where(cond, args...)
 	if !a.StudioPlan(studioID).HighQuality { // premium-tier platform voices are a membership benefit (own clones always count)
 		q = q.Where("(scope <> ? OR price_tier <> ?)", model.ScopeSystem, model.TierPremium)
 	}

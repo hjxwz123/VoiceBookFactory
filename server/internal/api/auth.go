@@ -128,6 +128,7 @@ func (s *Server) publicRoutes(r chi.Router) {
 			"supportEmail": site.SupportEmail, "icp": site.ICP, "speechRate": site.SpeechRate,
 			"phoneLogin": s.app.PhoneLoginAvailable(), "oauthProviders": s.app.OAuthProviders(),
 			"legalVersion": s.app.LegalVersion(), "operator": site.Operator, "version": version.Version,
+			"aiServices": s.app.ConfiguredServices(), // only platforms an administrator configured are named publicly
 		}, nil
 	}))
 	// agreements and policies are public: they must be readable before signing up

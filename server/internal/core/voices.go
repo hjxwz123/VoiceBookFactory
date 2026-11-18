@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -60,6 +61,10 @@ func (a *App) VoiceView(v *model.Voice, userID string) map[string]any {
 		"modelLabel": tts.ModelLabel(v.Model),
 	}
 	m["capabilities"] = VoiceCaps(v)
+	if !a.voiceUsable(v) { // a custom voice exists only on its own account, which is now off
+		m["unavailable"] = true
+		m["statusNote"] = "创建这个音色的语音账号已停用或删除，音色无法在其他账号使用，暂时不能生成配音"
+	}
 	if userID != "" {
 		var n int64
 		a.DB.Model(&model.VoiceFavorite{}).Where("user_id = ? AND voice_id = ?", userID, v.ID).Count(&n)
@@ -113,6 +118,15 @@ func (a *App) StartVoiceDesign(x *Access, description, previewText, provider, ch
 	if len([]rune(description)) > 1000 {
 		return nil, nil, Bad("描述最多 1000 字")
 	}
+	// fail now, not after a queued job, when no account of the platform has room for another custom voice
+	if _, acc, _, err := a.voiceAccount(provider, x.StudioID, wantDesign, 1, nil); err != nil {
+		if errors.Is(err, errVoiceQuotaFull) {
+			a.alertQuotaExhausted(provider, x.StudioID, wantDesign)
+		}
+		return nil, nil, err
+	} else if provider == "" {
+		provider = acc.Provider // the platform the design page described
+	}
 	d := &model.VoiceDesign{UserID: x.User.ID, StudioID: x.StudioID, Prompt: description, Provider: provider, PreviewText: previewText, Status: "running", Attributes: model.EmptyMap()}
 	d.Candidates.V = []model.DesignCandidate{}
 	if err := a.DB.Create(d).Error; err != nil {
@@ -158,35 +172,92 @@ func (a *App) jobVoiceDesign(ctx context.Context, jc *jobs.Context) error {
 			attrs = v
 		}
 	}
-	p, acc, err := a.designAccount(d.Provider, d.StudioID, func(c tts.Capabilities) bool { return c.VoiceDesign })
-	if err != nil {
-		return fail(err)
+	// candidates are created on an account with room for them; one the platform reports full is skipped
+	var p tts.Provider
+	var acc *model.ProviderAccount
+	var cands []tts.DesignCandidate
+	var err error
+	skip := map[string]bool{}
+	for {
+		var room int
+		p, acc, room, err = a.voiceAccount(d.Provider, d.StudioID, wantDesign, designReserve, skip)
+		if errors.Is(err, errVoiceQuotaFull) { // no account takes three: one that takes fewer gives fewer candidates
+			p, acc, room, err = a.voiceAccount(d.Provider, d.StudioID, wantDesign, 1, skip)
+		}
+		if err != nil {
+			if errors.Is(err, errVoiceQuotaFull) {
+				a.alertQuotaExhausted(d.Provider, d.StudioID, wantDesign)
+			}
+			return fail(err)
+		}
+		count := designReserve
+		if room >= 0 && room < count {
+			count = room
+		}
+		d.Provider, d.AccountID = acc.Provider, acc.ID
+		a.DB.Model(&d).Updates(map[string]any{"provider": acc.Provider, "account_id": acc.ID}) // reserves the slots while running
+		jc.Progress(0.4, fmt.Sprintf("正在生成 %d 个候选声音（平台审核通过后显示）", count))
+		cands, err = p.(tts.VoiceDesigner).DesignVoice(ctx, tts.DesignRequest{Description: d.Prompt, PreviewText: d.PreviewText, Gender: attrs.Gender, AgeGroup: attrs.AgeGroup, Count: count, Seed: d.ID})
+		if errors.Is(err, tts.ErrVoiceQuotaFull) {
+			a.markVoicesFull(acc)
+			skip[acc.ID] = true
+			continue
+		}
+		if err != nil {
+			return fail(err) // nothing was generated: nothing is charged
+		}
+		break
 	}
-	jc.Progress(0.4, "正在生成 3 个候选声音（平台审核通过后显示）")
-	cands, err := p.(tts.VoiceDesigner).DesignVoice(ctx, tts.DesignRequest{Description: d.Prompt, PreviewText: d.PreviewText, Gender: attrs.Gender, AgeGroup: attrs.AgeGroup, Count: 3, Seed: d.ID})
-	if err != nil {
-		return fail(err) // nothing was generated: nothing is charged
+	discard := func() { // do not leave candidates nobody can save on the platform: they take the account's slots
+		for _, c := range cands {
+			discardVoice(ctx, p, c.ProviderVoiceID)
+		}
 	}
 	if _, err := a.ChargeCredits(Charge{StudioID: d.StudioID, UserID: d.UserID, JobID: jc.Job.ID, Feature: FeatDesign, Quantity: 1, Unit: "calls", Provider: acc.Provider, AccountID: acc.ID}); err != nil {
-		if cl, ok := p.(tts.VoiceCloner); ok { // do not leave unpaid candidates on the platform
-			for _, c := range cands {
-				_ = cl.DeleteVoice(context.WithoutCancel(ctx), c.ProviderVoiceID)
-			}
-		}
+		discard()
 		return fail(err)
 	}
 	var out []model.DesignCandidate
 	for i, c := range cands {
 		as, _, err := a.storeSpeech(ctx, d.StudioID, d.UserID, c.Preview, model.AssetPreview, map[string]any{"designId": d.ID})
 		if err != nil {
+			discard()
 			return fail(err)
 		}
 		out = append(out, model.DesignCandidate{ProviderVoiceID: c.ProviderVoiceID, PreviewAssetID: as.ID, Seed: i, Model: c.Model, PriceTier: c.PriceTier})
 	}
 	a.DB.Model(&d).Updates(map[string]any{"status": "ready", "provider": acc.Provider, "account_id": acc.ID, "candidates": model.JSON[[]model.DesignCandidate]{V: out},
 		"attributes": model.Map{V: map[string]any{"gender": attrs.Gender, "ageGroup": attrs.AgeGroup, "tags": attrs.Tags, "name": attrs.Name}}})
+	a.alertVoiceQuota(acc)
 	jc.Progress(1, "候选声音已生成，挑选一个保存吧")
 	return nil
+}
+
+func wantDesign(c tts.Capabilities) bool { return c.VoiceDesign }
+
+func wantClone(tier string) func(tts.Capabilities) bool {
+	return func(c tts.Capabilities) bool {
+		if tier == "pro" {
+			return c.ProClone
+		}
+		return c.QuickClone
+	}
+}
+
+// alertQuotaExhausted warns administrators when a user could not create a custom voice because every account of
+// the platform is full.
+func (a *App) alertQuotaExhausted(provider, studioID string, want func(tts.Capabilities) bool) {
+	var accs []model.ProviderAccount
+	q := a.DB.Where("kind = ? AND enabled = ? AND scope = ?", model.KindTTS, true, "platform")
+	if provider != "" {
+		q = q.Where("provider IN ?", providerNames(provider))
+	}
+	q.Order("priority desc").Find(&accs)
+	for i := range accs {
+		if p, err := tts.New(a.ttsAccount(&accs[i])); err == nil && want(p.Capabilities()) && voiceLimit(&accs[i]) > 0 {
+			a.alertVoiceQuota(&accs[i])
+		}
+	}
 }
 
 func (a *App) DesignView(d *model.VoiceDesign) map[string]any {
@@ -284,6 +355,9 @@ func (a *App) CleanupDesignCandidates() {
 			}
 			d.Candidates.V[k].Discarded, changed = true, true
 		}
+		if changed {
+			a.voicesFreed(acc.ID)
+		}
 		cancel()
 		if changed {
 			a.DB.Model(d).Update("candidates", d.Candidates)
@@ -299,15 +373,24 @@ type DesignOption struct {
 	Demo       bool   `json:"demo"`
 	ModelLabel string `json:"modelLabel,omitempty"`
 	PromptMax  int    `json:"promptMax"`
-	KeepHours  int    `json:"keepHours"` // unsaved candidates are removed after this many hours
+	KeepHours  int    `json:"keepHours"`      // unsaved candidates are removed after this many hours
+	Full       bool   `json:"full,omitempty"` // every account of the platform keeps as many custom voices as it may
+	FullNote   string `json:"fullNote,omitempty"`
 }
 
 func (a *App) DesignOptions(studioID string) DesignOption {
-	_, acc, err := a.designAccount("", studioID, func(c tts.Capabilities) bool { return c.VoiceDesign })
+	_, acc, _, err := a.voiceAccount("", studioID, wantDesign, 1, nil)
+	full := errors.Is(err, errVoiceQuotaFull)
+	if full { // describe the platform anyway, and say why nothing can be created right now
+		_, acc, err = a.designAccount("", studioID, wantDesign)
+	}
 	if err != nil {
 		return DesignOption{}
 	}
 	o := DesignOption{Available: true, Provider: acc.Provider, Platform: firstNonEmpty(platformNames[acc.Provider], acc.Name), Demo: acc.Provider == "placeholder", PromptMax: 1000}
+	if full {
+		o.Full, o.FullNote = true, errVoiceQuotaFull.Msg
+	}
 	if c := platformCaps(acc.Provider); c.DesignPromptMax > 0 {
 		o.PromptMax = c.DesignPromptMax
 	}
@@ -419,18 +502,32 @@ func (a *App) StartClone(ctx context.Context, x *Access, in CloneInput) (*model.
 	if err := a.checkCloneLimit(x); err != nil {
 		return nil, err
 	}
-	if opt := a.CloneOptions(x.StudioID)[in.Tier]; !opt.Available {
+	opt := a.CloneOptions(x.StudioID)[in.Tier]
+	if !opt.Available {
 		return nil, &Error{Status: 503, Code: "tts_not_configured", Msg: "平台还没有开通支持" + map[string]string{"quick": "快速克隆", "pro": "专业克隆"}[in.Tier] + "的语音账号，请联系管理员"}
-	} else if opt.MinSeconds > 0 {
-		var total int64
-		for _, id := range in.SampleIDs {
-			if _, as, err := a.AssetPath(id); err == nil {
-				total += int64(as.DurationMs)
+	}
+	if in.Provider == "" || contains(providerNames(in.Provider), opt.Provider) {
+		in.Provider = opt.Provider // train on the platform the clone page described
+		if opt.Full {
+			a.alertQuotaExhausted(in.Provider, x.StudioID, wantClone(in.Tier))
+			return nil, errVoiceQuotaFull
+		}
+		if opt.MinSeconds > 0 {
+			var total int64
+			for _, id := range in.SampleIDs {
+				if _, as, err := a.AssetPath(id); err == nil {
+					total += int64(as.DurationMs)
+				}
+			}
+			if total > 0 && total < int64(opt.MinSeconds)*1000 {
+				return nil, Bad("样本太短：%s至少需要 %d 秒的朗读，现在只有约 %d 秒，请再录一段", spaced(opt.Platform), opt.MinSeconds, (total+500)/1000)
 			}
 		}
-		if total > 0 && total < int64(opt.MinSeconds)*1000 {
-			return nil, Bad("样本太短：%s至少需要 %d 秒的朗读，现在只有约 %d 秒，请再录一段", spaced(opt.Platform), opt.MinSeconds, (total+500)/1000)
+	} else if _, _, _, err := a.voiceAccount(in.Provider, x.StudioID, wantClone(in.Tier), 1, nil); err != nil { // a platform named by an API caller
+		if errors.Is(err, errVoiceQuotaFull) {
+			a.alertQuotaExhausted(in.Provider, x.StudioID, wantClone(in.Tier))
 		}
+		return nil, err
 	}
 	consent := model.VoiceConsent{Type: in.ConsentType, UserID: x.User.ID, StudioID: x.StudioID, SpeakerName: in.SpeakerName, IdentityInfo: maskIdentity(in.Identity), Statement: in.Statement, Challenge: in.Challenge, EvidenceAsset: in.EvidenceID, DocumentAsset: in.DocumentID}
 	status := model.VoiceTraining
@@ -493,6 +590,8 @@ type CloneOption struct {
 	ExpiryDays    int    `json:"expiryDays"`
 	ExpiresUnused bool   `json:"expiresUnused"`
 	ModelLabel    string `json:"modelLabel,omitempty"` // model new clones are bound to, when the platform binds them
+	Full          bool   `json:"full,omitempty"`       // every account of the platform keeps as many custom voices as it may
+	FullNote      string `json:"fullNote,omitempty"`
 }
 
 var platformNames = map[string]string{"minimax": "MiniMax", "qwen": "千问", "aliyun": "千问", "placeholder": "内置演示引擎", "elevenlabs": "ElevenLabs", "volcengine": "火山引擎", "volcengine_audio": "火山引擎"}
@@ -501,12 +600,11 @@ var platformNames = map[string]string{"minimax": "MiniMax", "qwen": "千问", "a
 func (a *App) CloneOptions(studioID string) map[string]CloneOption {
 	out := map[string]CloneOption{}
 	for _, tier := range []string{"quick", "pro"} {
-		_, acc, err := a.designAccount("", studioID, func(c tts.Capabilities) bool {
-			if tier == "pro" {
-				return c.ProClone
-			}
-			return c.QuickClone
-		})
+		_, acc, _, err := a.voiceAccount("", studioID, wantClone(tier), 1, nil)
+		full := errors.Is(err, errVoiceQuotaFull)
+		if full {
+			_, acc, err = a.designAccount("", studioID, wantClone(tier))
+		}
 		if err != nil {
 			out[tier] = CloneOption{}
 			continue
@@ -530,6 +628,9 @@ func (a *App) CloneOptions(studioID string) map[string]CloneOption {
 				m = tts.QwenDefaultCloneModel
 			}
 			o.ModelLabel = tts.ModelLabel(m)
+		}
+		if full {
+			o.Full, o.FullNote = true, errVoiceQuotaFull.Msg
 		}
 		out[tier] = o
 	}
@@ -608,15 +709,23 @@ func (a *App) jobVoiceClone(ctx context.Context, jc *jobs.Context) error {
 		return jobs.Permanent(err)
 	}
 	tier := v.CloneTier
-	p, acc, err := a.designAccount(v.Provider, v.StudioID, func(c tts.Capabilities) bool {
-		if tier == "pro" {
-			return c.ProClone
+	// a run that stopped half way may have left its voice on the platform, where it takes one of the account's slots
+	if v.ProviderVoiceID != "" && v.Status == model.VoiceTraining {
+		if p, _, err := a.voiceProvider(&v); err == nil {
+			discardVoice(ctx, p, v.ProviderVoiceID)
 		}
-		return c.QuickClone
-	})
+		a.DB.Model(&v).Update("provider_voice_id", "")
+		v.ProviderVoiceID = ""
+	}
+	skip := map[string]bool{}
+	p, acc, _, err := a.voiceAccount(v.Provider, v.StudioID, wantClone(tier), 1, skip)
 	if err != nil {
+		if errors.Is(err, errVoiceQuotaFull) {
+			a.alertQuotaExhausted(v.Provider, v.StudioID, wantClone(tier))
+		}
 		return fail(err)
 	}
+	provider := acc.Provider
 	caps := p.Capabilities()
 	var paths []string
 	if raw, ok := jc.Job.Payload.V["samples"].([]any); ok {
@@ -650,12 +759,38 @@ func (a *App) jobVoiceClone(ctx context.Context, jc *jobs.Context) error {
 	}
 	jc.Progress(0.2, "已提交训练")
 	sampleText := "你好，这是用我的声音克隆出来的音色，听起来像我吗？"
-	res, err := p.(tts.VoiceCloner).CloneVoice(ctx, tts.CloneRequest{Name: v.Name, SamplePaths: paths, MergedPath: merged, Tier: tier, Language: v.Language, Gender: v.Gender, AgeGroup: v.AgeGroup, Seed: v.ID,
-		Denoise: denoise, PreviewText: sampleText})
-	if err != nil {
-		return fail(err)
+	var res *tts.CloneResult
+	for {
+		// the voice belongs to this account from now on (and takes one of its slots while training)
+		a.DB.Model(&v).Updates(map[string]any{"provider": acc.Provider, "provider_account_id": acc.ID})
+		res, err = p.(tts.VoiceCloner).CloneVoice(ctx, tts.CloneRequest{Name: v.Name, SamplePaths: paths, MergedPath: merged, Tier: tier, Language: v.Language, Gender: v.Gender, AgeGroup: v.AgeGroup, Seed: v.ID,
+			Denoise: denoise, PreviewText: sampleText})
+		if errors.Is(err, tts.ErrVoiceQuotaFull) { // the platform counts more voices than this site: try the next account
+			a.markVoicesFull(acc)
+			skip[acc.ID] = true
+			if p, acc, _, err = a.voiceAccount(provider, v.StudioID, wantClone(tier), 1, skip); err != nil {
+				if errors.Is(err, errVoiceQuotaFull) {
+					a.alertQuotaExhausted(provider, v.StudioID, wantClone(tier))
+				}
+				return fail(err)
+			}
+			continue
+		}
+		if err != nil {
+			return fail(err)
+		}
+		break
 	}
 	first := *res // status polls only report the state; keep what the clone call told us
+	// a voice that is not kept (failed review, charge failed, job stopped) is removed from the platform again
+	a.DB.Model(&v).Update("provider_voice_id", first.ProviderVoiceID)
+	kept := false
+	defer func() {
+		if !kept {
+			discardVoice(ctx, p, first.ProviderVoiceID)
+			a.DB.Model(&model.Voice{}).Where("id = ? AND status <> ?", v.ID, model.VoiceReady).Update("provider_voice_id", "")
+		}
+	}()
 	for i := 0; res.Status == "training" && i < 360; i++ {
 		select {
 		case <-ctx.Done():
@@ -692,6 +827,8 @@ func (a *App) jobVoiceClone(ctx context.Context, jc *jobs.Context) error {
 		up["expires_at"] = &exp
 	}
 	a.DB.Model(&v).Updates(up)
+	kept = true
+	a.alertVoiceQuota(acc)
 	a.DB.First(&v, "id = ?", v.ID)
 	// sample: the platform's own preview when it returns one; otherwise synthesize one, unless the first
 	// synthesis is billed as activation (the uploaded sample stays the preview until the voice is used)
@@ -819,9 +956,10 @@ func (a *App) DeleteVoice(ctx context.Context, v *model.Voice) error {
 		var shared int64
 		a.DB.Model(&model.Voice{}).Where("id <> ? AND provider IN ? AND provider_voice_id = ?", v.ID, providerNames(v.Provider), v.ProviderVoiceID).Count(&shared)
 		if shared == 0 {
-			if p, _, err := a.TTSFor(v); err == nil {
-				if c, ok := p.(tts.VoiceCloner); ok {
-					c.DeleteVoice(ctx, v.ProviderVoiceID)
+			// delete it with its own account (even a disabled one): no other account has it
+			if p, acc, err := a.voiceProvider(v); err == nil {
+				if c, ok := p.(tts.VoiceCloner); ok && c.DeleteVoice(ctx, v.ProviderVoiceID) == nil {
+					a.voicesFreed(acc.ID)
 				}
 			}
 		}

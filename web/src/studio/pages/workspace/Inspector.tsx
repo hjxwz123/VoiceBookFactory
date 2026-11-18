@@ -194,7 +194,7 @@ function SegmentInspector({ s, book, chapterId, chars, segs }: { s: any; book: a
       {s.type !== 'sfx' && (
         <Section title="演绎">
           {char?.voice?.capabilities && !char.voice.capabilities.emotion && (
-            <p className="mb-3 rounded-md bg-sunken px-3 py-2 text-xs text-muted">当前音色（{char.voice.modelLabel || char.voice.name}）不支持情绪和语气控制，下面的情绪设置会被忽略。可以通过语速、音高和停顿调整表现，或在「角色」里换成支持情绪的音色（Qwen-Audio、MiniMax、豆包音频生成）。</p>
+            <p className="mb-3 rounded-md bg-sunken px-3 py-2 text-xs text-muted">当前音色（{char.voice.modelLabel || char.voice.name}）不支持情绪和语气控制，下面的情绪设置会被忽略。可以通过语速、音高和停顿调整表现，或在「角色」里换成支持情绪的音色（音色详情里标有「情绪控制」的都可以）。</p>
           )}
           <div className="flex flex-wrap gap-1.5">
             {emotions.map(([k, l]) => (

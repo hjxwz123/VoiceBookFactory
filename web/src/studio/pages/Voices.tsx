@@ -9,7 +9,7 @@ import { ageName, dateTime, emotions, genderName, num, tierName } from '@/lib/fo
 import { usePlayer } from '@/lib/player'
 import { useSession, useStudio } from '@/lib/session'
 import { PlayButton, Recorder, UploadZone } from '@/components/audio'
-import { Voice, VoicePlay, VoiceRow, voiceModels } from '@/components/voice'
+import { useVoiceModels, Voice, VoicePlay, VoiceRow } from '@/components/voice'
 import { Badge, Button, Checkbox, Chip, cn, confirm, Dialog, Empty, Field, IconButton, Input, PageHeader, Pagination, Panel, Progress, Segmented, Select, Sheet, Skeleton, Switch, Textarea, Tip } from '@/components/ui'
 import { invalidate } from '../hooks'
 
@@ -50,13 +50,14 @@ function Library() {
   const [page, setPage] = useState(1)
   const open = params.get('voice')
   const { data, isLoading } = useQuery({ queryKey: ['voices', sid, tab, q, gender, age, tier, vmodel, series, page], queryFn: () => api.get(`/studios/${sid}/voices${qs({ tab, q, gender, age, tier, model: vmodel, series, page, pageSize: 24, group: 1 })}`), placeholderData: (p) => p })
+  const models = useVoiceModels()
   const reset = () => setPage(1)
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <Segmented value={tab} onChange={(v) => { setTab(v); reset() }} items={[{ value: 'system', label: '平台音色' }, { value: 'studio', label: '工作室' }, { value: 'mine', label: '我的' }, { value: 'favorites', label: '收藏' }, { value: 'market', label: '市场' }]} />
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Select value={vmodel} onChange={(v) => { setVModel(v); reset() }} options={voiceModels} className="w-40" />
+          {models.length > 2 && <Select value={vmodel} onChange={(v) => { setVModel(v); reset() }} options={models} className="w-40" />}
           {tab === 'system' && <Select value={series} onChange={(v) => { setSeries(v); reset() }} options={[['', '全部系列'], ['system', '精选系统音色'], ['base', '基础音色库（600+）']]} className="w-44" />}
           <div className="w-64 max-sm:w-full"><Input icon={<Search />} placeholder="搜索：温柔、少年、播音腔……" value={q} onChange={(e) => { setQ(e.target.value); reset() }} /></div>
         </div>
@@ -232,7 +233,7 @@ function Design() {
   }, [char.data])
   const design = useQuery({ queryKey: ['design', designId], queryFn: () => api.get(`/voice-designs/${designId}`), enabled: !!designId, refetchInterval: (q) => (q.state.data?.status === 'ready' || q.state.data?.status === 'failed' ? false : 1500) })
   const history = useQuery<any>({ queryKey: ['designs', sid], queryFn: () => api.get(`/studios/${sid}/voice-designs?pageSize=8`) })
-  const optQ = useQuery<{ available: boolean; provider: string; platform: string; demo: boolean; modelLabel?: string; promptMax: number; keepHours: number }>({ queryKey: ['design-options', sid], queryFn: () => api.get(`/studios/${sid}/voices/design-options`), enabled: !!sid })
+  const optQ = useQuery<{ available: boolean; provider: string; platform: string; demo: boolean; modelLabel?: string; promptMax: number; keepHours: number; full?: boolean; fullNote?: string }>({ queryKey: ['design-options', sid], queryFn: () => api.get(`/studios/${sid}/voices/design-options`), enabled: !!sid })
   const dopt = optQ.data
   const promptMax = dopt?.promptMax || 1000
   const d = design.data
@@ -267,8 +268,9 @@ function Design() {
                 ? <span className="mt-0.5 block text-warn">当前只接入了内置演示引擎，只能体验流程，不会生成真实的声音</span>
                 : <span className="mt-0.5 block">由{/^[\x00-\x7f]+$/.test(dopt.platform) ? ` ${dopt.platform} ` : dopt.platform}设计{dopt.modelLabel ? `（${dopt.modelLabel}），保存后绑定这个模型，长期有效` : ''}</span>)}
             </span>
-            <Button variant="primary" icon={<Wand2 className="size-4" />} loading={busy || (d && d.status !== 'ready' && d.status !== 'failed')} disabled={desc.trim().length < 4} onClick={start}>生成候选</Button>
+            <Button variant="primary" icon={<Wand2 className="size-4" />} loading={busy || (d && d.status !== 'ready' && d.status !== 'failed')} disabled={desc.trim().length < 4 || !!dopt?.full} onClick={start}>生成候选</Button>
           </div>
+          {dopt?.full && <p className="mt-4 rounded-md bg-warn-soft px-3 py-2 text-[13px] text-warn">{dopt.fullNote}</p>}
         </Panel>
         <AnimatePresence>
           {d && (
@@ -323,7 +325,7 @@ function Design() {
 }
 
 // ---------------- Voice clone ----------------
-type CloneOption = { available: boolean; provider: string; platform: string; demo: boolean; minSeconds: number; maxSeconds: number; recommendSeconds: number; expiryDays: number; expiresUnused: boolean; modelLabel?: string }
+type CloneOption = { available: boolean; provider: string; platform: string; demo: boolean; minSeconds: number; maxSeconds: number; recommendSeconds: number; expiryDays: number; expiresUnused: boolean; modelLabel?: string; full?: boolean; fullNote?: string }
 
 const secondsText = (s: number) => (s >= 60 && s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`)
 /** Spaces around a platform name only when it is a Latin word ("由 MiniMax 复刻" / "由千问复刻"). */
@@ -410,7 +412,7 @@ function Clone() {
                   const off = !!optionsQ.data && !o?.available
                   return (
                     <button key={k} disabled={off} onClick={() => setTier(k)} className={cn('rounded-[12px] border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-55', tier === k && !off ? 'border-accent bg-accent-soft' : 'border-line enabled:hover:border-line-strong')}>
-                      <div className="flex items-center gap-2 text-[14px] font-semibold">{t}{k === 'pro' && studio?.planCode === 'free' && !off && <Badge tone="signal">付费套餐</Badge>}{off && <Badge>暂未开放</Badge>}</div>
+                      <div className="flex items-center gap-2 text-[14px] font-semibold">{t}{k === 'pro' && studio?.planCode === 'free' && !off && <Badge tone="signal">付费套餐</Badge>}{off && <Badge>暂未开放</Badge>}{o?.full && <Badge tone="warn">名额已满</Badge>}</div>
                       <p className="mt-1 text-[13px] text-muted">{k === 'quick' ? quickCloneText(o, d) : d}</p>
                       {o?.available && <p className={cn('mt-2 text-[12px]', o.demo ? 'text-warn' : 'text-faint')}>{cloneOptionNote(o)}</p>}
                     </button>
@@ -426,7 +428,8 @@ function Clone() {
                   </button>
                 ))}
               </div>
-              <div className="mt-6 flex justify-end"><Button variant="primary" disabled={!!optionsQ.data && !opt?.available} onClick={() => setStep(1)}>下一步</Button></div>
+              {opt?.full && <p className="mt-5 rounded-md bg-warn-soft px-3 py-2 text-[13px] text-warn">{opt.fullNote}</p>}
+              <div className="mt-6 flex justify-end"><Button variant="primary" disabled={(!!optionsQ.data && !opt?.available) || !!opt?.full} onClick={() => setStep(1)}>下一步</Button></div>
             </Panel>
           )}
           {step === 1 && (

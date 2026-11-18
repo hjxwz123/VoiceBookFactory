@@ -32,7 +32,7 @@ func (placeholder) Capabilities() Capabilities {
 	return Capabilities{
 		Emotion: true, Emotions: allEmotions, InlineTags: true, Instruction: true, Phoneme: true,
 		VoiceDesign: true, QuickClone: true, ProClone: true, VoiceChange: true, Dialogue: true,
-		MaxChars: 5000, Languages: []string{"zh-CN", "en-US"},
+		MaxChars: 5000, Languages: []string{"zh-CN", "en-US"}, LocalVoices: true, // voices are generated from a seed here
 	}
 }
 

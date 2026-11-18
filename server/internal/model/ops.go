@@ -49,6 +49,9 @@ type ProviderAccount struct {
 	Calls          int64                 `json:"calls"`
 	Failures       int64                 `json:"failures"`
 	TotalLatencyMs int64                 `json:"totalLatencyMs"`
+	// VoicesFullAt: the platform refused a new custom voice because the account keeps too many; cleared once one of
+	// its custom voices is deleted or the key changes.
+	VoicesFullAt *time.Time `json:"voicesFullAt"`
 }
 
 type RoutingRule struct {

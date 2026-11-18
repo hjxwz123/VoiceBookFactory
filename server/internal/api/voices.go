@@ -37,6 +37,8 @@ func (s *Server) voiceRoutes(r chi.Router) {
 			q = q.Where("status = ?", model.VoiceReady).Where(s.app.DB.Where("scope = ? AND listed = ?", model.ScopeSystem, true).
 				Or("scope = ? AND studio_id = ?", model.ScopeStudio, x.StudioID).Or("scope = ? AND owner_user_id = ?", model.ScopeUser, x.User.ID).
 				Or("scope = ? AND studio_id = ? AND shared = ?", model.ScopeUser, x.StudioID, true))
+			cond, args := s.app.UsableVoices() // the casting picker leaves out voices that cannot be spoken now
+			q = q.Where(cond, args...)
 		default:
 			q = q.Where("scope = ? AND listed = ?", model.ScopeSystem, true)
 		}
@@ -336,6 +338,14 @@ func (s *Server) voiceRoutes(r chi.Router) {
 		return s.app.VoiceView(v, x.User.ID), nil
 	}))
 	// ---- clone ----
+	// models the library can be filtered by: only platforms an administrator configured
+	r.Get("/studios/{sid}/voices/models", h(func(r *http.Request) (any, error) {
+		x, err := s.studio(r)
+		if err != nil {
+			return nil, err
+		}
+		return s.app.VoiceModelOptions(x.User.ID, x.StudioID), nil
+	}))
 	r.Get("/studios/{sid}/voices/design-options", h(func(r *http.Request) (any, error) {
 		x, err := s.studio(r)
 		if err != nil {

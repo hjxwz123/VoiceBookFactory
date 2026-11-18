@@ -152,6 +152,8 @@ func (a *App) resolveVoice(c *model.Character, studioID string) (*voiceChoice, e
 		var pool []model.Voice
 		q := a.DB.Where("crowd_pool = ? AND status = ? AND (scope = 'system' OR studio_id = ?)", true, model.VoiceReady, studioID).
 			Where("(scope <> ? OR provider IN ?)", model.ScopeSystem, a.ActiveTTSProviders())
+		cond, args := a.UsableVoices()
+		q = q.Where(cond, args...)
 		if c.Gender == "male" || c.Gender == "female" {
 			q = q.Where("gender = ?", c.Gender)
 		}
@@ -653,8 +655,7 @@ func (a *App) ttsSegments(ctx context.Context, j *model.Job, jc reporter, skipHo
 			var lim chan struct{}
 			if c := chars[s.CharacterID]; c != nil {
 				if vc, err := a.segmentVoice(&s, c, b.StudioID); err == nil {
-					var acc model.ProviderAccount
-					if a.DB.Select("id", "concurrency").First(&acc, "id = ? OR (provider = ? AND kind = ?)", vc.Voice.ProviderAccountID, vc.Voice.Provider, model.KindTTS).Error == nil {
+					if _, acc, err := a.TTSFor(vc.Voice); err == nil { // the account the line will really be spoken with
 						lim = a.Q.Limiter("tts:"+acc.ID, acc.Concurrency)
 					}
 				}

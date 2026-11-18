@@ -116,7 +116,7 @@ func (v *volcAudio) Capabilities() Capabilities {
 		Emotion: true, Emotions: allEmotions, InlineTags: true, Instruction: true, MaxChars: 5000, // tags are written into the prompt
 		Languages:  []string{"zh-CN", "en-US", "ja-JP", "ko-KR", "es", "de", "fr", "pt", "th", "vi", "ms", "fil", "it", "ru", "nl", "pl", "tr"},
 		QuickClone: true, CloneMinSeconds: 5, CloneMaxSeconds: 30,
-		VoiceDesign: true, DesignPromptMax: 500,
+		VoiceDesign: true, DesignPromptMax: 500, LocalVoices: true, // clones and designs are recordings kept on this site
 	}
 }
 

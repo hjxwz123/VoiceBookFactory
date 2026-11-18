@@ -21,10 +21,17 @@ export function Providers() {
   const [edit, setEdit] = useState<any>(null)
   const [testing, setTesting] = useState('')
   const list = (data ?? []).filter((p) => p.kind === kind && p.scope === 'platform')
+  const quota = kind === 'tts' ? quotaNotes(list) : []
   return (
     <div>
       <PageHeader title="模型与供应商" description="平台调用 AI 服务使用的账号。大语言模型支持 OpenAI Chat、OpenAI Responses 和 Anthropic Claude 三种协议，任何兼容服务都可以接入。语音合成已接入千问、MiniMax 与火山引擎，语音识别已接入千问、火山引擎与 OpenAI 兼容服务，图像生成已接入 OpenAI GPT Image 与 Google Nano Banana，音效已接入 ElevenLabs 与火山引擎。" actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEdit({ kind })}>添加账号</Button>} />
       <Segmented className="mb-4" value={kind} onChange={setKind} items={Object.entries(kindLabel).map(([k, l]) => ({ value: k, label: `${l} ${(data ?? []).filter((p) => p.kind === k && p.scope === 'platform').length || ''}` }))} />
+      {quota.map((n) => (
+        <div key={n.key} className={cn('mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-panel border px-4 py-3 text-[13px]', n.danger ? 'border-danger/40 bg-danger-soft text-danger' : 'border-warn/40 bg-warn-soft text-warn')}>
+          <div className="min-w-0 flex-1"><div className="font-medium">{n.title}</div><div className="mt-0.5 text-ink/80">{n.detail}</div></div>
+          <Button size="sm" variant={n.danger ? 'primary' : 'secondary'} icon={<Plus className="size-4" />} onClick={() => setEdit({ kind: 'tts' })}>添加账号</Button>
+        </div>
+      ))}
       <Panel padded={false}>
         {!list.length ? <Empty title={`还没有${kindLabel[kind]}账号`} description={kind === 'llm' ? '角色分析、AI 画本、选角等核心功能依赖大语言模型，请至少配置一个。' : kind === 'image' ? '没有接入图像模型时，封面和角色头像由内置生成器画抽象图，不能写书名。推荐接入 OpenAI GPT Image 或 Google Nano Banana。' : '未配置时会使用内置演示引擎。'} action={<Button variant="primary" onClick={() => setEdit({ kind })}>添加</Button>} /> : (
           <Table>
@@ -32,14 +39,17 @@ export function Providers() {
             <tbody>
               {list.map((p) => (
                 <tr key={p.id}>
-                  <td><div className="font-medium">{p.name}</div><div className="max-w-56 truncate font-mono text-[11px] text-faint">{p.baseUrl}</div></td>
+                  <td><div className="font-medium">{p.name}</div><div className="max-w-56 truncate font-mono text-[11px] text-faint">{p.baseUrl}</div>{p.customVoices && <VoiceQuota q={p.customVoices} />}</td>
                   <td className="text-muted">{adapterName(p)}</td>
                   <td className="font-mono text-xs">{p.model || '—'}</td>
                   <td className="text-right tnum">{p.priority}</td>
                   <td className="text-right tnum">{num(p.calls)}</td>
                   <td className="text-right tnum">{num(p.failures)}</td>
                   <td>{p.healthStatus === 'ok' ? <Badge tone="ok">正常</Badge> : p.healthStatus === 'error' ? <Badge tone="danger" className="max-w-36 truncate" >{p.healthNote || '异常'}</Badge> : <Badge>未检测</Badge>}</td>
-                  <td><Switch checked={p.enabled} onChange={async (v) => { await adminApi.patch(`/providers/${p.id}`, { enabled: v }); ainv(['/providers']) }} /></td>
+                  <td><Switch checked={p.enabled} onChange={async (v) => {
+                    if (!v && p.boundVoices > 0 && !(await confirm({ title: '停用这个账号？', description: `这个账号上有 ${p.boundVoices} 个用户克隆或设计的音色，它们只存在于这个账号里，不能换别的账号生成。停用期间这些音色无法使用，重新启用后恢复。`, danger: true, confirmText: '停用' }))) return
+                    await adminApi.patch(`/providers/${p.id}`, { enabled: v }); ainv(['/providers'])
+                  }} /></td>
                   <td className="whitespace-nowrap text-right">
                     <Button size="xs" variant="ghost" loading={testing === p.id} onClick={async () => { setTesting(p.id); try { const r = await adminApi.post(`/providers/${p.id}/test`); if (r?.ok === false) toast.error(r.message); else toast.success(r?.message || '连接正常') } catch (e: any) { toast.error(e.message) } finally { setTesting(''); ainv(['/providers']) } }}>测试</Button>
                     {p.kind === 'tts' && <Button size="xs" variant="ghost" icon={<RefreshCw className="size-3" />} onClick={async () => { try { const r = await adminApi.post(`/providers/${p.id}/sync-voices`); toast.success(r.imported ? `新增 ${r.imported} 个音色` : '音色库已是最新') } catch (e: any) { toast.error(e.message) } }}>同步音色</Button>}
@@ -59,6 +69,41 @@ export function Providers() {
       <ProviderEditor value={edit} presets={presets.data ?? []} onClose={() => setEdit(null)} />
     </div>
   )
+}
+
+type Quota = { used: number; limit: number; full: boolean; platformFull?: boolean }
+
+/** Custom voice usage of an account whose platform caps it (Qianwen: 1000 per account). */
+function VoiceQuota({ q }: { q: Quota }) {
+  const near = !q.full && q.used >= q.limit * 0.9
+  return (
+    <div className={cn('mt-1 text-[11.5px] tnum', q.full ? 'text-danger' : near ? 'text-warn' : 'text-muted')} title="复刻和设计的音色共用这个名额">
+      自定义音色 {num(q.used)} / {num(q.limit)}{q.full ? (q.platformFull && q.used < q.limit ? '（平台提示已满）' : '（已满）') : near ? '（快满了）' : ''}
+    </div>
+  )
+}
+
+/** Banners for platforms whose accounts are running out of custom voice slots. */
+function quotaNotes(list: any[]) {
+  const by = new Map<string, any[]>()
+  const platform = (p: any) => (p.provider === 'aliyun' ? '千问' : adapterName(p)) // older aliyun accounts are Qianwen too
+  for (const p of list) if (p.enabled && p.customVoices) by.set(platform(p), [...(by.get(platform(p)) ?? []), p])
+  const out: { key: string; danger: boolean; title: string; detail: string }[] = []
+  for (const [name, accs] of by) {
+    const qwen = accs.some((p) => p.provider === 'qwen' || p.provider === 'aliyun')
+    const tip = qwen ? '名额按千问 AI 平台账号计算，同一个账号下的多个 API Key 共用名额，新账号请用另一个千问 AI 平台账号的 API Key。' : ''
+    const full = accs.filter((p) => p.customVoices.full)
+    const near = accs.filter((p) => !p.customVoices.full && p.customVoices.used >= p.customVoices.limit * 0.9)
+    if (full.length === accs.length) {
+      out.push({ key: name, danger: true, title: `${name}的自定义音色名额已用完`, detail: `用户现在无法克隆或设计新的音色，请添加一个新的${name}账号。${tip}` })
+    } else if (full.length || near.length) {
+      const names = [...full, ...near].map((p) => `「${p.name}」${num(p.customVoices.used)} / ${num(p.customVoices.limit)}`).join('、')
+      const spare = accs.length - full.length - near.length
+      out.push({ key: name, danger: false, title: `${name}账号的自定义音色${full.length ? '有账号已满' : '快满了'}：${names}`,
+        detail: (spare > 0 ? `新的克隆和设计音色会自动使用还有名额的${name}账号。` : `全部用完后用户将无法克隆或设计新的音色。`) + `建议提前添加一个新的${name}账号。${tip}` })
+    }
+  }
+  return out
 }
 
 function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[]; onClose: () => void }) {
@@ -100,7 +145,7 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
   }
   return (
     <Sheet open={!!value} onOpenChange={(o) => !o && onClose()} title={value?.id ? `编辑「${value.name}」` : `添加${kindLabel[f.kind]}账号`} width={580} footer={<>
-      {value?.id && <IconButton label="删除" className="mr-auto text-danger" icon={<Trash2 className="size-4" />} onClick={async () => { if (await confirm({ title: '删除这个账号？', description: '使用它的路由规则会自动回退到其他账号。', danger: true, confirmText: '删除' })) { await adminApi.del(`/providers/${value.id}`); ainv(['/providers']); onClose() } }} />}
+      {value?.id && <IconButton label="删除" className="mr-auto text-danger" icon={<Trash2 className="size-4" />} onClick={async () => { if (await confirm({ title: '删除这个账号？', description: value.boundVoices > 0 ? `这个账号上有 ${value.boundVoices} 个用户克隆或设计的音色，它们只存在于这个账号里，删除后将永久无法使用（换别的账号也用不了）。只想暂停使用请改为停用。` : '使用它的路由规则会自动回退到其他账号。', danger: true, confirmText: '删除' })) { await adminApi.del(`/providers/${value.id}`); ainv(['/providers']); onClose() } }} />}
       <Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!f.provider || !f.name} onClick={save}>保存</Button>
     </>}>
       <div className="space-y-5">
@@ -118,7 +163,7 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
             <Field label="适配器"><Input value={f.provider} onChange={(e) => set('provider', e.target.value)} /></Field>
           )}
           <Field label="接口地址（Base URL）" className="col-span-2" hint={isSuno ? '支持 Suno 的 New API / One API 中转服务的根地址，例如 https://relay.example.com，不要带 /v1' : undefined}><Input value={f.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} placeholder={isSuno ? 'https://relay.example.com' : undefined} className="font-mono text-[12.5px]" /></Field>
-          <Field label="API Key" className="col-span-2" hint={value?.id ? `当前 ••••${value.keyLast4}，留空则不修改` : '加密保存'}><Input type="password" value={f.apiKey} onChange={(e) => set('apiKey', e.target.value)} autoComplete="off" /></Field>
+          <Field label="API Key" className="col-span-2" hint={value?.id ? `当前 ••••${value.keyLast4}，留空则不修改${value.boundVoices > 0 ? `。这个账号上有 ${value.boundVoices} 个用户克隆或设计的音色，只能换成同一个平台账号下的 Key，换成别的平台账号后这些音色将无法使用` : ''}` : '加密保存'}><Input type="password" value={f.apiKey} onChange={(e) => set('apiKey', e.target.value)} autoComplete="off" /></Field>
           <Field label="默认模型" hint={isMiniMax ? 'HD 音质最好，Turbo 更快更便宜；音色库里的音色自带模型' : isVolcASR ? 'volc.seedasr.auc 是 2.0（推荐），volc.bigasr.auc 是 1.0' : isQwenASR ? '都返回逐字时间戳。qwen-audio-3.1-asr-flash 会自动润色（去掉语气词和重复），配音自检想严格核对口误和重复时可改用 qwen-audio-3.0-asr-flash' : undefined}><SuggestInput value={f.model} onChange={(v) => set('model', v)} suggestions={modelOptions} className="font-mono text-[12.5px]" /></Field>
           <Field label="优先级" hint="同类账号中数字大的优先使用"><Input type="number" value={f.priority} onChange={(e) => set('priority', e.target.value)} /></Field>
           <Field label="每分钟请求上限" hint={isMiniMax ? '充值用户 20，免费用户 10；超出会自动排队' : undefined}><Input type="number" value={f.rpm} onChange={(e) => set('rpm', e.target.value)} /></Field>
@@ -162,7 +207,12 @@ function ProviderEditor({ value, presets, onClose }: { value: any; presets: any[
                 <Select value={f.config.designModel ?? ''} onChange={(v) => setC('designModel', v)} options={[['', '与复刻相同'], ['qwen-audio-3.1-tts-plus', 'Qwen-Audio 3.1 Plus'], ['qwen-audio-3.1-tts-flash', 'Qwen-Audio 3.1 Flash'], ['qwen-audio-3.0-tts-plus', 'Qwen-Audio 3.0 Plus'], ['qwen-audio-3.0-tts-flash', 'Qwen-Audio 3.0 Flash'], ['cosyvoice-v3.5-plus', 'CosyVoice v3.5 Plus'], ['cosyvoice-v3.5-flash', 'CosyVoice v3.5 Flash'], ['cosyvoice-v3-plus', 'CosyVoice v3 Plus'], ['cosyvoice-v3-flash', 'CosyVoice v3 Flash']]} />
               </Field>
             </div>
-            <p className="mt-3 text-[12px] text-muted">创建复刻、设计音色都免费，合成时按所绑定模型计费；每个千问账号最多保留 1000 个自定义音色（复刻和设计共用），一年没用过的会被千问自动删除。每次设计会生成 3 个候选，用户没保存的候选 24 小时后自动清理。已经创建的音色不受这里修改的影响。</p>
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <Field label="自定义音色上限" hint="千问规定每个千问 AI 平台账号最多 1000 个（复刻和设计共用）。只有千问调整了上限才需要修改">
+                <Input type="number" min={1} value={f.config.voiceLimit ?? ''} onChange={(e) => setC('voiceLimit', e.target.value === '' ? '' : Math.max(1, Math.round(Number(e.target.value))))} placeholder="1000" />
+              </Field>
+            </div>
+            <p className="mt-3 text-[12px] text-muted">创建复刻、设计音色都免费，合成时按所绑定模型计费。音色保存在创建它的千问账号里，只能用这个账号合成；这个账号的名额用完后，新的音色会自动改用其他还有名额的千问账号，全部用完时会在这里和首页提醒你添加账号。同一个千问 AI 平台账号下的多个 API Key 共用名额。一年没用过的音色会被千问自动删除；每次设计会生成 3 个候选，用户没保存的候选 24 小时后自动清理。已经创建的音色不受这里修改的影响。</p>
           </Panel>
         )}
         {isOpenAIImage && (

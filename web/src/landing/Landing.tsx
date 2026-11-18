@@ -742,7 +742,7 @@ function Pricing({ plans, g, authed, contact }: { plans: Plan[]; g: Guide; authe
 const FAQ: [string, string][] = [
   ['需要会配音或剪辑吗？', '不需要。上传书稿后，拆章、分析角色、选角、标注画本、配音和合成都可以交给 AI；想精修时再进制作台逐句调整。'],
   ['书稿的版权谁负责？', '平台只提供制作工具，不审查也不保证任何内容的版权。书稿须是你的原创、已取得有声改编授权，或已进入公有领域；因版权产生的纠纷由使用者自行承担。'],
-  ['用的是哪些 AI 模型？', '大语言模型支持 OpenAI、Claude 和兼容协议的服务（如 DeepSeek、通义千问）；语音合成接入了千问、MiniMax 和火山引擎豆包音频生成，语音识别接入了千问和火山引擎。具体使用哪些由平台管理员配置。'],
+  ['用的是哪些 AI 模型？', ''], // filled in from what the administrators configured (aiServices)
   ['做出来的声音可以商用吗？', '个人版及以上包含精品音色和商用授权；免费版用于体验，不含商用授权。发布到平台时请按平台要求标注 AI 生成。'],
   ['积分是怎么算的？', '画本和配音按字数计算，设计音色、克隆按次数，对轨和审听按音频时长。开始生成前都会显示预计消耗；相同内容重复生成命中缓存，不扣积分。'],
   ['人名、多音字读错了怎么办？', '在「读音」里定好读法，全书统一生效；已经配好的相关句子会标为有改动，一键重新生成。每句话还有 2 次免费重新生成。'],
@@ -751,14 +751,23 @@ const FAQ: [string, string][] = [
   ['导出成品是什么格式？', 'MP3、WAV、M4A，或整本书一个带章节标记和封面的 M4B；还可以附带字幕、分角色分轨、演播稿和台词本。免费版只能导出 MP3。'],
   ['一本书大概要多久？', '取决于字数和排队情况。一键成书会自动走完全部步骤并在任务中心显示进度，你可以随时进制作台精修已经完成的章节。'],
 ]
+/** Names only the services this site really has configured, never every platform the software can connect to. */
+function modelsAnswer(svc?: Record<string, string[]>) {
+  const parts = ([['tts', '语音合成'], ['asr', '语音识别'], ['image', '封面生成'], ['music', '配乐生成'], ['sfx', '音效生成']] as const)
+    .filter(([k]) => svc?.[k]?.length).map(([k, l]) => `${l}使用${svc![k].join('、')}`)
+  return '大语言模型支持 OpenAI、Claude 和兼容协议的服务。' + (parts.length ? `目前${parts.join('，')}。` : '') + '具体接入哪些服务由平台管理员配置，可能随时调整。'
+}
+
 function Faq() {
   const [open, setOpen] = useState<number | null>(null)
   const reduce = useReducedMotion()
+  const site = useSession((s) => s.site) as any
+  const faq = FAQ.map(([q, a]): [string, string] => [q, a || modelsAnswer(site?.aiServices)])
   return (
     <section className="sec" id="faq" aria-labelledby="faq-h">
       <Head n="05" label="常见问题" title={<span id="faq-h">还想知道的</span>} />
       <div className="faq">
-        {FAQ.map(([q, a], i) => {
+        {faq.map(([q, a], i) => {
           const on = open === i
           return (
             <Reveal key={q} delay={(i % 2) * 0.06 + Math.floor(i / 2) * 0.05} className={'qa' + (on ? ' on' : '')}>

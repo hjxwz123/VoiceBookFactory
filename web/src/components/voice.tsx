@@ -12,6 +12,8 @@ export type Voice = {
   sampleUrl: string; status: string; scope: string; favorite?: boolean; recommended?: boolean; origin?: string; usageCount?: number; emotions?: string[]
   expiresAt?: string | null; statusNote?: string; shared?: boolean; listed?: boolean; cloneTier?: string; ownerUserId?: string; studioId?: string; designPrompt?: string
   model?: string; modelLabel?: string; capabilities?: any; language?: string
+  /** a cloned or designed voice whose own platform account is off (it exists on no other account) */
+  unavailable?: boolean
   /** other models offering the same platform voice (only when listed with group=1) */
   versions?: Voice[]
 }
@@ -22,7 +24,7 @@ export function shownVersion(v: Voice, current?: string): Voice {
   return hit ? { ...hit, versions: v.versions, favorite: v.favorite } : v
 }
 
-/** Synthesis model families — every voice belongs to exactly one model. */
+/** Every synthesis model family (admin console). Studio pages use useVoiceModels: only configured platforms. */
 export const voiceModels: [string, string][] = [
   ['', '全部模型'],
   ['qwen-audio-3.1-tts-plus', 'Qwen-Audio 3.1 Plus'],
@@ -37,6 +39,13 @@ export const voiceModels: [string, string][] = [
   ['seed-audio-1.0', '豆包音频生成（火山引擎）'],
   ['placeholder', '内置演示引擎'],
 ]
+
+/** Models the voice library can be filtered by: only platforms an administrator configured, with voices to show. */
+export function useVoiceModels(): [string, string][] {
+  const sid = useSession((s) => s.studioId)
+  const { data } = useQuery<{ value: string; label: string }[]>({ queryKey: ['voice-models', sid], queryFn: () => api.get(`/studios/${sid}/voices/models`), enabled: !!sid, staleTime: 60_000 })
+  return [['', '全部模型'], ...(data ?? []).map((m) => [m.value, m.label] as [string, string])]
+}
 
 /**
  * Plays a voice's preview. Platform voices without an official preview get one generated on first play
@@ -92,6 +101,7 @@ export function VoiceRow({ v, selected, onSelect, onVersion, extra, reason }: { 
           {v.priceTier && <Badge tone={v.priceTier === 'premium' ? 'signal' : v.priceTier === 'economy' ? 'neutral' : 'accent'}>{tierName[v.priceTier]}</Badge>}
           {onVersion && (v.versions?.length ?? 0) > 1 ? <VersionMenu v={v} onVersion={onVersion} /> : <ModelBadge v={v} />}
           {v.status !== 'ready' && <Badge tone="warn">{v.status === 'expired' ? '已过期' : v.status === 'pending' ? '审核中' : v.status}</Badge>}
+          {v.status === 'ready' && v.unavailable && <span title={v.statusNote}><Badge tone="warn">暂不可用</Badge></span>}
         </div>
         <div className="mt-0.5 truncate text-xs text-muted">
           {[genderName[known(v.gender)], ageName[known(v.ageGroup)], ...(v.tags ?? []).slice(0, 4)].filter(Boolean).join(' · ')}
@@ -128,6 +138,7 @@ export function VoicePicker({ open, onOpenChange, onPick, current, title = '选�
     enabled: open && !!sid,
     placeholderData: (p) => p,
   })
+  const models = useVoiceModels()
   const sugg = (suggestions ?? []).filter((s) => s.voice)
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={title} width={560}>
@@ -150,7 +161,7 @@ export function VoicePicker({ open, onOpenChange, onPick, current, title = '选�
         <span className="mx-1 w-px bg-line" />
         <Select size="sm" value={age} onChange={(v) => { setAge(v); setPage(1) }} options={[['', '全部年龄'], ...Object.entries(ageName).filter(([k]) => k !== 'unknown')]} className="w-28" />
         <Select size="sm" value={tier} onChange={(v) => { setTier(v); setPage(1) }} options={[['', '全部价位'], ...Object.entries(tierName)]} className="w-28" />
-        <Select size="sm" value={vmodel} onChange={(v) => { setVModel(v); setPage(1) }} options={voiceModels} className="w-40" />
+        {models.length > 2 && <Select size="sm" value={vmodel} onChange={(v) => { setVModel(v); setPage(1) }} options={models} className="w-40" />}
         {tab === 'system' && <Select size="sm" value={series} onChange={(v) => { setSeries(v); setPage(1) }} options={[['', '全部系列'], ['system', '精选系统音色'], ['base', '基础音色库']]} className="w-32" />}
       </div>
       <div className="mt-4 space-y-2">

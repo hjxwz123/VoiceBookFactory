@@ -354,7 +354,8 @@ function Notifications() {
                   }
                   if (n.link) {
                     setOpen(false)
-                    nav(n.link)
+                    if (/^\/admin(\/|$)/.test(n.link)) window.location.assign(n.link) // the admin console is a separate page
+                    else nav(n.link)
                   }
                 }}
                 className="flex w-full gap-3 rounded-[10px] px-2 py-2.5 text-left hover:bg-sunken"

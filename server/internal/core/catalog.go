@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,7 @@ func (a *App) dropTTSProviders() {
 	activeTTS.Lock()
 	activeTTS.at = time.Time{}
 	activeTTS.Unlock()
+	dropEnabledTTSAccounts()
 }
 
 // UpsertCatalogVoices imports platform voices into the official library. Existing voices keep any edits made
@@ -341,4 +343,72 @@ func downloadFile(ctx context.Context, url, dst string, progress func(done, tota
 			return rerr
 		}
 	}
+}
+
+// voiceModelOrder is the order of the voice library's model filter; other models follow alphabetically.
+var voiceModelOrder = []string{
+	"qwen-audio-3.1-tts-plus", "qwen-audio-3.1-tts-flash", "qwen-audio-3.0-tts-plus", "qwen-audio-3.0-tts-flash",
+	"cosyvoice-v3.5-plus", "cosyvoice-v3.5-flash", "cosyvoice-v3-plus", "cosyvoice-v3-flash", "cosyvoice-v2",
+	"speech-2.8-hd", "speech-2.8-turbo", "seed-audio-1.0",
+}
+
+// ModelOption is one entry of the voice library's model filter.
+type ModelOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// VoiceModelOptions lists the models a user can filter the voice library by: only models of platforms with an
+// enabled account (platform-wide, or the studio's own key) that have voices this user can see. A platform nobody
+// configured never shows up, even when its voices are still in the catalog.
+func (a *App) VoiceModelOptions(userID, studioID string) []ModelOption {
+	providers := append([]string{}, a.ActiveTTSProviders()...)
+	var own []string
+	a.DB.Model(&model.ProviderAccount{}).Where("kind = ? AND scope = ? AND studio_id = ? AND enabled = ?", model.KindTTS, "studio", studioID, true).Distinct().Pluck("provider", &own)
+	for _, p := range own {
+		providers = append(providers, providerNames(p)...)
+	}
+	var rows []struct{ Provider, Model string }
+	q := a.DB.Model(&model.Voice{}).Distinct("provider", "model").Where("status = ? AND provider IN ?", model.VoiceReady, providers).
+		Where(a.DB.Where("scope = ? AND listed = ?", model.ScopeSystem, true).
+			Or("scope = ? AND studio_id = ?", model.ScopeStudio, studioID).
+			Or("scope = ? AND owner_user_id = ?", model.ScopeUser, userID).
+			Or("scope = ? AND studio_id = ? AND shared = ?", model.ScopeUser, studioID, true))
+	cond, args := a.UsableVoices()
+	q.Where(cond, args...).Scan(&rows)
+	seen := map[string]bool{}
+	var out []ModelOption
+	demo := false
+	for _, r := range rows {
+		switch {
+		case r.Provider == "placeholder":
+			demo = true
+		case r.Model != "" && !seen[r.Model]:
+			seen[r.Model] = true
+			label := tts.ModelLabel(r.Model)
+			if strings.HasPrefix(r.Model, "seed-audio") {
+				label += "（火山引擎）"
+			}
+			out = append(out, ModelOption{Value: r.Model, Label: label})
+		}
+	}
+	rank := func(m string) int {
+		for i, x := range voiceModelOrder {
+			if x == m {
+				return i
+			}
+		}
+		return len(voiceModelOrder)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := rank(out[i].Value), rank(out[j].Value)
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].Value < out[j].Value
+	})
+	if demo {
+		out = append(out, ModelOption{Value: "placeholder", Label: "内置演示引擎"})
+	}
+	return out
 }
